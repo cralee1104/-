@@ -28,6 +28,7 @@
             window.firebaseApp = initializeApp(firebaseConfig);
             window.db = getFirestore(window.firebaseApp);
             window.firestore = { collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, orderBy, onSnapshot };
+            console.log('Firebase 初始化成功');
         } catch (error) {
             console.error('Firebase 初始化失敗:', error);
             window.firebaseApp = null;
@@ -39,7 +40,7 @@
         .icon-lg { width: 20px; height: 20px; }
         .icon-xl { width: 32px; height: 32px; }
         
-        /* 移除按鈕點擊後的藍色邊框，但保留鍵盤導航的焦點樣式 */
+        /* 移除按鈕點擊後的藍色邊框 */
         button:focus:not(:focus-visible) {
             outline: none;
         }
@@ -49,6 +50,22 @@
             outline: 2px solid #3B82F6;
             outline-offset: 2px;
         }
+        
+        /* 動畫效果 */
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        .notification {
+            animation: slideIn 0.3s ease-out;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -57,6 +74,14 @@
         <div class="flex items-center gap-2">
             <div id="cloudIcon"><i data-lucide="cloud-off" class="icon"></i></div>
             <span id="cloudText">連接中...</span>
+        </div>
+    </div>
+
+    <!-- 最後更新時間 -->
+    <div id="lastUpdateTime" class="fixed top-4 left-4 z-40 px-3 py-2 rounded-lg text-xs bg-gray-50 text-gray-600 shadow-md hidden">
+        <div class="flex items-center gap-2">
+            <i data-lucide="clock" class="icon"></i>
+            <span id="updateTimeText">最後更新: --</span>
         </div>
     </div>
 
@@ -145,9 +170,9 @@
                             批量操作
                         </button>
 
-                        <button id="syncBtn" class="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
+                        <button id="syncBtn" class="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors" title="手動同步資料">
                             <i data-lucide="refresh-cw" class="icon"></i>
-                            同步資料
+                            <span class="hidden sm:inline">同步資料</span>
                         </button>
                     </div>
                 </div>
@@ -342,7 +367,7 @@
     </div>
 
     <script>
-        // 全域變數
+        // ==================== 全域變數 ====================
         let records = [];
         let filteredRecords = [];
         let currentView = 'current';
@@ -351,12 +376,12 @@
         let selectedRecords = new Set();
         let showBulkActions = false;
         let isOnlineMode = false;
-        let unsubscribe = null; // 用於儲存 Firestore 監聽器
-        let lastUpdate = null; // 用於追蹤最後更新時間
+        let unsubscribe = null;
+        let lastUpdate = null;
 
-        // 初始化
+        // ==================== 初始化 ====================
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('DOM 載入完成');
+            console.log('DOM 載入完成，開始初始化...');
             
             // 初始化 Lucide 圖示
             lucide.createIcons();
@@ -368,7 +393,7 @@
                 dateInput.value = today;
             }
             
-            // 延遲檢查 Firebase 配置，確保模組載入完成
+            // 延遲檢查 Firebase 配置
             setTimeout(() => {
                 checkFirebaseConfig();
             }, 500);
@@ -383,13 +408,11 @@
             updateCurrentView();
         });
 
-        // 檢查 Firebase 配置
+        // ==================== Firebase 相關函數 ====================
         function checkFirebaseConfig() {
             console.log('檢查 Firebase 配置...');
-            // 檢查 Firebase 是否已正確初始化
             try {
                 if (window.firebaseApp && window.db && window.firebaseApp.options.apiKey !== "你的API密鑰") {
-                    // Firebase 已初始化
                     console.log('Firebase 已正確配置');
                     document.getElementById('firebaseModal').classList.add('hidden');
                     updateCloudStatus('online', '雲端同步');
@@ -398,7 +421,6 @@
                     throw new Error('Firebase not configured');
                 }
             } catch (error) {
-                // Firebase 未正確配置
                 console.log('Firebase 未配置，顯示設定說明');
                 document.getElementById('firebaseModal').classList.remove('hidden');
                 updateCloudStatus('offline', '離線模式');
@@ -406,197 +428,163 @@
             }
         }
 
-        // 更新雲端狀態
+        // ==================== UI 更新函數 ====================
         function updateCloudStatus(status, text) {
             const statusEl = document.getElementById('cloudStatus');
             const iconEl = document.getElementById('cloudIcon');
             const textEl = document.getElementById('cloudText');
+            const updateTimeEl = document.getElementById('lastUpdateTime');
+            const updateTimeTextEl = document.getElementById('updateTimeText');
             
-            // 清除舊的類別
             statusEl.className = 'fixed top-4 right-4 z-50 px-3 py-2 rounded-lg text-sm font-medium shadow-lg';
             
             if (status === 'online') {
                 statusEl.classList.add('bg-green-100', 'text-green-800');
                 iconEl.innerHTML = '<i data-lucide="cloud-check" class="icon"></i>';
+                
+                if (lastUpdate) {
+                    updateTimeEl.classList.remove('hidden');
+                    updateTimeTextEl.textContent = `最後更新: ${formatUpdateTime(lastUpdate)}`;
+                }
             } else if (status === 'syncing') {
                 statusEl.classList.add('bg-blue-100', 'text-blue-800');
                 iconEl.innerHTML = '<i data-lucide="cloud-upload" class="icon animate-pulse"></i>';
             } else {
                 statusEl.classList.add('bg-gray-100', 'text-gray-800');
                 iconEl.innerHTML = '<i data-lucide="cloud-off" class="icon"></i>';
+                updateTimeEl.classList.add('hidden');
             }
             
             textEl.textContent = text;
             lucide.createIcons();
         }
 
-        // 綁定事件監聽器
+        function formatUpdateTime(date) {
+            const now = new Date();
+            const diff = now - date;
+            
+            if (diff < 60000) {
+                return '剛剛';
+            } else if (diff < 3600000) {
+                const minutes = Math.floor(diff / 60000);
+                return `${minutes} 分鐘前`;
+            } else if (diff < 86400000) {
+                const hours = Math.floor(diff / 3600000);
+                return `${hours} 小時前`;
+            } else {
+                return date.toLocaleString('zh-TW', { 
+                    month: 'numeric', 
+                    day: 'numeric', 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                });
+            }
+        }
+
+        // 定期更新時間顯示
+        setInterval(() => {
+            if (lastUpdate && isOnlineMode) {
+                const updateTimeTextEl = document.getElementById('updateTimeText');
+                if (updateTimeTextEl) {
+                    updateTimeTextEl.textContent = `最後更新: ${formatUpdateTime(lastUpdate)}`;
+                }
+            }
+        }, 30000);
+
+        // ==================== 事件監聽器綁定 ====================
         function bindEventListeners() {
             console.log('開始綁定事件監聽器...');
             
-            // 視圖切換
-            document.querySelectorAll('.view-btn').forEach(btn => {
-                btn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    console.log('點擊視圖按鈕:', btn.dataset.view);
-                    switchView(btn.dataset.view);
-                });
+            // 視圖切換按鈕
+            document.getElementById('currentViewBtn').addEventListener('click', function() {
+                switchView('current');
+            });
+            
+            document.getElementById('historyViewBtn').addEventListener('click', function() {
+                switchView('history');
             });
 
             // 搜尋和篩選
-            const searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.addEventListener('input', debounce(filterRecords, 300));
-            }
-            
-            const statusFilter = document.getElementById('statusFilter');
-            if (statusFilter) {
-                statusFilter.addEventListener('change', filterRecords);
-            }
-            
-            const technicianFilter = document.getElementById('technicianFilter');
-            if (technicianFilter) {
-                technicianFilter.addEventListener('change', filterRecords);
-            }
+            document.getElementById('searchInput').addEventListener('input', debounce(filterRecords, 300));
+            document.getElementById('statusFilter').addEventListener('change', filterRecords);
+            document.getElementById('technicianFilter').addEventListener('change', filterRecords);
 
-            // 按鈕事件
-            const addRecordBtn = document.getElementById('addRecordBtn');
-            if (addRecordBtn) {
-                addRecordBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    console.log('點擊新增記錄按鈕');
-                    showAddRecordModal();
-                });
-            }
+            // 新增記錄
+            document.getElementById('addRecordBtn').addEventListener('click', function() {
+                console.log('點擊新增記錄按鈕');
+                showAddRecordModal();
+            });
             
-            const cancelAddBtn = document.getElementById('cancelAddBtn');
-            if (cancelAddBtn) {
-                cancelAddBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    hideAddRecordModal();
-                });
-            }
+            document.getElementById('cancelAddBtn').addEventListener('click', function() {
+                hideAddRecordModal();
+            });
             
-            const addRecordForm = document.getElementById('addRecordForm');
-            if (addRecordForm) {
-                addRecordForm.addEventListener('submit', handleAddRecord);
-            }
-            
-            const syncBtn = document.getElementById('syncBtn');
-            if (syncBtn) {
-                syncBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    console.log('點擊同步按鈕');
-                    syncData();
-                });
-            }
-            
-            const bulkActionsBtn = document.getElementById('bulkActionsBtn');
-            if (bulkActionsBtn) {
-                bulkActionsBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    toggleBulkActions();
-                });
-            }
-            
-            const exportBtn = document.getElementById('exportBtn');
-            if (exportBtn) {
-                exportBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    toggleExportMenu();
-                });
-            }
-            
-            const exportCSV = document.getElementById('exportCSV');
-            if (exportCSV) {
-                exportCSV.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    exportToCSV();
-                });
-            }
-            
-            const exportStats = document.getElementById('exportStats');
-            if (exportStats) {
-                exportStats.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    exportStatistics();
-                });
-            }
+            document.getElementById('addRecordForm').addEventListener('submit', handleAddRecord);
 
-            // 批量操作
-            const selectAllCheckbox = document.getElementById('selectAllCheckbox');
-            if (selectAllCheckbox) {
-                selectAllCheckbox.addEventListener('change', toggleSelectAll);
-            }
+            // 同步和批量操作
+            document.getElementById('syncBtn').addEventListener('click', function() {
+                console.log('點擊同步按鈕');
+                syncData();
+            });
             
-            const bulkCompleteBtn = document.getElementById('bulkCompleteBtn');
-            if (bulkCompleteBtn) {
-                bulkCompleteBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    bulkUpdateStatus('completed');
-                });
-            }
+            document.getElementById('bulkActionsBtn').addEventListener('click', toggleBulkActions);
+
+            // 匯出功能
+            document.getElementById('exportBtn').addEventListener('click', function(e) {
+                e.stopPropagation();
+                toggleExportMenu();
+            });
             
-            const bulkPendingBtn = document.getElementById('bulkPendingBtn');
-            if (bulkPendingBtn) {
-                bulkPendingBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    bulkUpdateStatus('pending');
-                });
-            }
-            
-            const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
-            if (bulkDeleteBtn) {
-                bulkDeleteBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    bulkDeleteRecords();
-                });
-            }
+            document.getElementById('exportCSV').addEventListener('click', exportToCSV);
+            document.getElementById('exportStats').addEventListener('click', exportStatistics);
+
+            // 批量操作按鈕
+            document.getElementById('selectAllCheckbox').addEventListener('change', toggleSelectAll);
+            document.getElementById('bulkCompleteBtn').addEventListener('click', () => bulkUpdateStatus('completed'));
+            document.getElementById('bulkPendingBtn').addEventListener('click', () => bulkUpdateStatus('pending'));
+            document.getElementById('bulkDeleteBtn').addEventListener('click', bulkDeleteRecords);
 
             // Firebase 模態框
-            const useOfflineBtn = document.getElementById('useOfflineBtn');
-            if (useOfflineBtn) {
-                useOfflineBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    console.log('使用離線模式');
-                    document.getElementById('firebaseModal').classList.add('hidden');
-                    updateCloudStatus('offline', '離線模式');
-                    isOnlineMode = false;
-                    loadRecords();
-                });
-            }
+            document.getElementById('useOfflineBtn').addEventListener('click', function() {
+                console.log('使用離線模式');
+                document.getElementById('firebaseModal').classList.add('hidden');
+                updateCloudStatus('offline', '離線模式');
+                isOnlineMode = false;
+                loadRecords();
+            });
             
-            const closeFirebaseModal = document.getElementById('closeFirebaseModal');
-            if (closeFirebaseModal) {
-                closeFirebaseModal.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    console.log('關閉設定模態框');
-                    document.getElementById('firebaseModal').classList.add('hidden');
-                    // 重新檢查 Firebase 設定
-                    setTimeout(() => {
-                        checkFirebaseConfig();
-                        if (isOnlineMode) {
-                            loadRecords();
-                        }
-                    }, 100);
-                });
-            }
-
-            // 點擊外部關閉
-            const addRecordModal = document.getElementById('addRecordModal');
-            if (addRecordModal) {
-                addRecordModal.addEventListener('click', function(e) {
-                    if (e.target.id === 'addRecordModal') {
-                        hideAddRecordModal();
+            document.getElementById('closeFirebaseModal').addEventListener('click', function() {
+                console.log('關閉設定模態框');
+                document.getElementById('firebaseModal').classList.add('hidden');
+                setTimeout(() => {
+                    checkFirebaseConfig();
+                    if (isOnlineMode) {
+                        loadRecords();
                     }
-                });
-            }
+                }, 100);
+            });
+
+            // 點擊外部關閉模態框
+            document.getElementById('addRecordModal').addEventListener('click', function(e) {
+                if (e.target.id === 'addRecordModal') {
+                    hideAddRecordModal();
+                }
+            });
+
+            // 點擊外部關閉匯出選單
+            document.addEventListener('click', function(e) {
+                const exportMenu = document.getElementById('exportMenu');
+                const exportBtn = document.getElementById('exportBtn');
+                
+                if (!exportBtn.contains(e.target) && !exportMenu.contains(e.target)) {
+                    exportMenu.classList.add('hidden');
+                }
+            });
 
             console.log('事件監聽器綁定完成');
         }
 
-        // 載入記錄
+        // ==================== 資料載入函數 ====================
         async function loadRecords() {
             console.log('載入記錄...');
             if (isOnlineMode) {
@@ -607,9 +595,7 @@
             }
         }
 
-        // 設定即時監聽器
         function setupRealtimeListener() {
-            // 如果已有監聽器，先取消
             if (unsubscribe) {
                 unsubscribe();
             }
@@ -622,7 +608,6 @@
                     window.firestore.orderBy('date', 'desc')
                 );
                 
-                // 設定即時監聽器
                 unsubscribe = window.firestore.onSnapshot(q, 
                     (querySnapshot) => {
                         records = [];
@@ -634,17 +619,13 @@
                         lastUpdate = new Date();
                         updateCloudStatus('online', '雲端同步 (即時)');
                         
-                        // 更新顯示
                         filterRecords();
-                        
-                        // 顯示更新提示
                         showUpdateNotification();
                     },
                     (error) => {
                         console.error('即時監聽失敗:', error);
                         updateCloudStatus('offline', '連線中斷');
                         
-                        // 嘗試重新連接
                         setTimeout(() => {
                             if (isOnlineMode) {
                                 setupRealtimeListener();
@@ -661,54 +642,12 @@
             }
         }
 
-        // 顯示更新通知
-        function showUpdateNotification() {
-            const notification = document.createElement('div');
-            notification.className = 'fixed bottom-4 right-4 bg-green-100 text-green-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
-            notification.innerHTML = `
-                <i data-lucide="refresh-cw" class="icon animate-spin"></i>
-                <span>資料已更新</span>
-            `;
-            document.body.appendChild(notification);
-            lucide.createIcons();
-            
-            setTimeout(() => {
-                notification.remove();
-            }, 2000);
-        }
-
-        // 從 Firebase 載入
-        async function loadFromFirebase() {
-            try {
-                updateCloudStatus('syncing', '同步中...');
-                const q = window.firestore.query(
-                    window.firestore.collection(window.db, 'records'),
-                    window.firestore.orderBy('date', 'desc')
-                );
-                const querySnapshot = await window.firestore.getDocs(q);
-                
-                records = [];
-                querySnapshot.forEach((doc) => {
-                    records.push({ id: doc.id, ...doc.data() });
-                });
-                
-                console.log('從 Firebase 載入了', records.length, '筆記錄');
-                updateCloudStatus('online', '雲端同步');
-            } catch (error) {
-                console.error('載入資料失敗:', error);
-                updateCloudStatus('offline', '同步失敗');
-                loadFromLocalStorage();
-            }
-        }
-
-        // 從本地存儲載入
         function loadFromLocalStorage() {
             const saved = localStorage.getItem('repairRecords');
             if (saved) {
                 records = JSON.parse(saved);
                 console.log('從本地載入了', records.length, '筆記錄');
             } else {
-                // 初始測試資料
                 const currentDate = new Date();
                 const currentYear = currentDate.getFullYear();
                 const currentMonth = (currentDate.getMonth() + 1).toString().padStart(2, '0');
@@ -735,17 +674,6 @@
                         supplement: '測試補充2', 
                         technician: '李', 
                         status: 'pending' 
-                    },
-                    { 
-                        id: '3', 
-                        date: `${currentYear - 1}-12-10`, 
-                        registrationData: '測試客戶3', 
-                        model: 'CUT58', 
-                        sequence: '33333', 
-                        repairItem: '測試維修3', 
-                        supplement: '測試補充3', 
-                        technician: '曾', 
-                        status: 'completed' 
                     }
                 ];
                 saveToLocalStorage();
@@ -753,12 +681,11 @@
             }
         }
 
-        // 儲存到本地
         function saveToLocalStorage() {
             localStorage.setItem('repairRecords', JSON.stringify(records));
         }
 
-        // 新增記錄到 Firebase
+        // ==================== Firebase 操作函數 ====================
         async function addToFirebase(record) {
             try {
                 await window.firestore.addDoc(window.firestore.collection(window.db, 'records'), record);
@@ -769,7 +696,6 @@
             }
         }
 
-        // 更新記錄到 Firebase
         async function updateInFirebase(id, data) {
             try {
                 const docRef = window.firestore.doc(window.db, 'records', id);
@@ -781,7 +707,6 @@
             }
         }
 
-        // 從 Firebase 刪除記錄
         async function deleteFromFirebase(id) {
             try {
                 await window.firestore.deleteDoc(window.firestore.doc(window.db, 'records', id));
@@ -792,26 +717,7 @@
             }
         }
 
-        // 同步資料
-        async function syncData() {
-            console.log('手動同步資料');
-            if (isOnlineMode) {
-                updateCloudStatus('syncing', '同步中...');
-                
-                // 如果有即時監聽器，資料應該已經是最新的
-                if (unsubscribe) {
-                    showSuccessNotification('資料已是最新狀態！');
-                    updateCloudStatus('online', '雲端同步 (即時)');
-                } else {
-                    // 重新設定監聽器
-                    setupRealtimeListener();
-                }
-            } else {
-                alert('請先設定 Firebase 才能使用雲端同步功能');
-            }
-        }
-
-        // 切換視圖
+        // ==================== 視圖相關函數 ====================
         function switchView(view) {
             console.log('切換視圖到:', view);
             currentView = view;
@@ -819,9 +725,7 @@
             filterRecords();
         }
 
-        // 更新當前視圖
         function updateCurrentView() {
-            // 更新按鈕狀態
             document.querySelectorAll('.view-btn').forEach(btn => {
                 if (btn.dataset.view === currentView) {
                     btn.className = 'flex items-center gap-2 px-6 py-3 rounded-lg transition-colors border bg-blue-600 text-white border-blue-600';
@@ -830,7 +734,6 @@
                 }
             });
 
-            // 顯示/隱藏相關元素
             if (currentView === 'history') {
                 document.getElementById('historySelector').classList.remove('hidden');
                 document.getElementById('addRecordBtn').classList.add('hidden');
@@ -844,12 +747,10 @@
             }
         }
 
-        // 建立歷史選擇器
         function buildHistorySelector() {
             const container = document.getElementById('historyYearList');
             container.innerHTML = '';
 
-            // 按年份分組
             const grouped = {};
             records.forEach(record => {
                 const date = new Date(record.date);
@@ -861,13 +762,11 @@
                 grouped[year][month].push(record);
             });
 
-            // 建立年份列表
             Object.keys(grouped)
                 .sort((a, b) => parseInt(b) - parseInt(a))
                 .forEach(year => {
                     const yearDiv = document.createElement('div');
                     
-                    // 年份按鈕
                     const yearBtn = document.createElement('button');
                     yearBtn.className = 'flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-gray-50 rounded-lg';
                     yearBtn.onclick = () => toggleYear(parseInt(year));
@@ -890,7 +789,6 @@
                     
                     yearDiv.appendChild(yearBtn);
                     
-                    // 月份列表
                     if (expandedYears.has(parseInt(year))) {
                         const monthsDiv = document.createElement('div');
                         monthsDiv.className = 'ml-6 space-y-1';
@@ -930,7 +828,6 @@
             lucide.createIcons();
         }
 
-        // 切換年份展開
         function toggleYear(year) {
             if (expandedYears.has(year)) {
                 expandedYears.delete(year);
@@ -940,24 +837,21 @@
             buildHistorySelector();
         }
 
-        // 選擇期間
         function selectPeriod(year, month) {
             selectedPeriod = { year, month };
             buildHistorySelector();
             filterRecords();
         }
 
-        // 獲取月份名稱
         function getMonthName(month) {
             const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
             return monthNames[month - 1];
         }
 
-        // 篩選記錄
+        // ==================== 記錄操作函數 ====================
         function filterRecords() {
             let recordsToFilter = records;
 
-            // 根據視圖篩選
             if (currentView === 'current') {
                 const currentDate = new Date();
                 const currentYear = currentDate.getFullYear();
@@ -978,7 +872,6 @@
                 recordsToFilter = [];
             }
 
-            // 搜尋和狀態篩選
             const searchTerm = document.getElementById('searchInput').value.toLowerCase();
             const statusFilter = document.getElementById('statusFilter').value;
             const technicianFilter = document.getElementById('technicianFilter').value;
@@ -1001,7 +894,6 @@
             updateBulkActionsVisibility();
         }
 
-        // 渲染記錄表格
         function renderRecords() {
             const tbody = document.getElementById('recordsTable');
             const noRecords = document.getElementById('noRecords');
@@ -1015,7 +907,6 @@
 
             noRecords.classList.add('hidden');
 
-            // 更新表格標題
             if (showBulkActions) {
                 if (!tableHeader.querySelector('.bulk-checkbox')) {
                     const checkboxTh = document.createElement('th');
@@ -1030,7 +921,6 @@
                 if (checkboxTh) checkboxTh.remove();
             }
 
-            // 渲染行
             tbody.innerHTML = filteredRecords.map(record => `
                 <tr class="hover:bg-gray-50 transition-colors cursor-pointer" onclick="toggleRowExpansion('${record.id}')">
                     ${showBulkActions ? `
@@ -1101,10 +991,8 @@
                 </tr>
             `).join('');
 
-            // 重新初始化圖示
             lucide.createIcons();
 
-            // 綁定複選框事件
             document.querySelectorAll('.record-checkbox').forEach(checkbox => {
                 checkbox.addEventListener('change', (e) => {
                     const id = e.target.dataset.id;
@@ -1118,32 +1006,6 @@
             });
         }
 
-        // 切換行展開
-        function toggleRowExpansion(id) {
-            const detailsRow = document.getElementById(`details-${id}`);
-            const expandIcon = document.querySelector(`[data-id="${id}"].expand-icon`);
-            
-            if (detailsRow.classList.contains('hidden')) {
-                // 隱藏所有其他展開的行
-                document.querySelectorAll('[id^="details-"]').forEach(row => {
-                    row.classList.add('hidden');
-                });
-                document.querySelectorAll('.expand-icon').forEach(icon => {
-                    icon.setAttribute('data-lucide', 'chevron-right');
-                });
-                
-                // 展開當前行
-                detailsRow.classList.remove('hidden');
-                expandIcon.setAttribute('data-lucide', 'chevron-down');
-            } else {
-                detailsRow.classList.add('hidden');
-                expandIcon.setAttribute('data-lucide', 'chevron-right');
-            }
-            
-            lucide.createIcons();
-        }
-
-        // 更新統計
         function updateStats() {
             const pendingCount = filteredRecords.filter(r => r.status === 'pending').length;
             const completedCount = filteredRecords.filter(r => r.status === 'completed').length;
@@ -1152,21 +1014,17 @@
             document.getElementById('completedCount').textContent = completedCount;
         }
 
-        // 顯示新增記錄模態框
+        // ==================== 新增/編輯/刪除記錄 ====================
         function showAddRecordModal() {
-            console.log('顯示新增記錄模態框');
             document.getElementById('addRecordModal').classList.remove('hidden');
-            // 清空表單
             document.getElementById('addRecordForm').reset();
             document.getElementById('recordDate').value = new Date().toISOString().split('T')[0];
         }
 
-        // 隱藏新增記錄模態框
         function hideAddRecordModal() {
             document.getElementById('addRecordModal').classList.add('hidden');
         }
 
-        // 處理新增記錄
         async function handleAddRecord(e) {
             e.preventDefault();
             
@@ -1179,13 +1037,12 @@
                 supplement: document.getElementById('recordSupplement').value,
                 technician: document.getElementById('recordTechnician').value,
                 status: document.getElementById('recordStatus').value,
-                createdAt: new Date().toISOString(), // 加入時間戳記
+                createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
 
             console.log('新增記錄:', formData);
 
-            // 檢查一年內是否有相同品牌機型和序號的記錄
             const oneYearAgo = new Date();
             oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
             
@@ -1205,19 +1062,16 @@
                 formData.previousRecordId = existingRecord.id;
             }
 
-            // 儲存到雲端或本地
             let success = true;
             if (isOnlineMode) {
                 updateCloudStatus('syncing', '上傳中...');
                 success = await addToFirebase(formData);
                 if (success) {
                     updateCloudStatus('online', '雲端同步 (即時)');
-                    // 即時監聽器會自動更新資料，不需要手動更新
                 } else {
                     updateCloudStatus('offline', '上傳失敗');
                 }
             } else {
-                // 離線模式
                 const newId = 'record_' + Date.now();
                 const newRecord = { id: newId, ...formData };
                 records.unshift(newRecord);
@@ -1233,41 +1087,10 @@
             }
         }
 
-        // 顯示成功通知
-        function showSuccessNotification(message) {
-            const notification = document.createElement('div');
-            notification.className = 'fixed top-20 right-4 bg-blue-100 text-blue-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
-            notification.innerHTML = `
-                <i data-lucide="check-circle" class="icon"></i>
-                <span>${message}</span>
-            `;
-            document.body.appendChild(notification);
-            lucide.createIcons();
-            
-            setTimeout(() => {
-                notification.remove();
-            }, 3000);
-        }
-
-        // 編輯記錄
-        function editRecord(id) {
-            const record = records.find(r => r.id === id);
-            if (!record) return;
-
-            // 簡單的編輯實現 - 在實際應用中可能需要更複雜的編輯表單
-            const newStatus = record.status === 'pending' ? 'completed' : 'pending';
-            
-            if (confirm(`將記錄狀態改為 ${newStatus === 'completed' ? '已完成' : '未修'}？`)) {
-                updateRecordStatus(id, newStatus);
-            }
-        }
-
-        // 更新記錄狀態
         async function updateRecordStatus(id, newStatus) {
             const recordIndex = records.findIndex(r => r.id === id);
             if (recordIndex === -1) return;
 
-            // 同步到雲端
             if (isOnlineMode) {
                 updateCloudStatus('syncing', '更新中...');
                 const success = await updateInFirebase(id, { 
@@ -1282,7 +1105,6 @@
                     alert('更新失敗，請檢查網路連線');
                 }
             } else {
-                // 離線模式
                 const oldRecord = records[recordIndex];
                 records[recordIndex] = { ...oldRecord, status: newStatus };
                 saveToLocalStorage();
@@ -1291,11 +1113,9 @@
             }
         }
 
-        // 刪除記錄
         async function deleteRecord(id) {
             if (!confirm('確定要刪除此記錄嗎？')) return;
 
-            // 同步到雲端
             if (isOnlineMode) {
                 updateCloudStatus('syncing', '刪除中...');
                 const success = await deleteFromFirebase(id);
@@ -1307,7 +1127,6 @@
                     alert('刪除失敗，請檢查網路連線');
                 }
             } else {
-                // 離線模式
                 const recordIndex = records.findIndex(r => r.id === id);
                 if (recordIndex !== -1) {
                     records.splice(recordIndex, 1);
@@ -1319,7 +1138,7 @@
             }
         }
 
-        // 批量操作相關函數
+        // ==================== 批量操作 ====================
         function toggleBulkActions() {
             showBulkActions = !showBulkActions;
             updateBulkActionsVisibility();
@@ -1366,7 +1185,6 @@
                 bulkButtons.classList.add('hidden');
             }
 
-            // 更新全選複選框狀態
             const allSelected = selectedRecords.size === filteredRecords.length && filteredRecords.length > 0;
             if (selectAllCheckbox) selectAllCheckbox.checked = allSelected;
             if (headerCheckbox) headerCheckbox.checked = allSelected;
@@ -1387,7 +1205,6 @@
 
             if (!confirm(`確定要將選中的 ${selectedRecords.size} 筆記錄標記為 ${newStatus === 'completed' ? '已完成' : '未修'}？`)) return;
 
-            // 同步到雲端
             if (isOnlineMode) {
                 updateCloudStatus('syncing', '批量更新中...');
                 let allSuccess = true;
@@ -1408,7 +1225,6 @@
                     alert('部分更新失敗，請檢查網路連線');
                 }
             } else {
-                // 離線模式
                 selectedRecords.forEach(id => {
                     const recordIndex = records.findIndex(r => r.id === id);
                     if (recordIndex !== -1) {
@@ -1432,7 +1248,6 @@
 
             const idsToDelete = Array.from(selectedRecords);
 
-            // 同步到雲端
             if (isOnlineMode) {
                 updateCloudStatus('syncing', '批量刪除中...');
                 let allSuccess = true;
@@ -1450,7 +1265,6 @@
                     alert('部分刪除失敗，請檢查網路連線');
                 }
             } else {
-                // 離線模式
                 idsToDelete.forEach(id => {
                     const recordIndex = records.findIndex(r => r.id === id);
                     if (recordIndex !== -1) {
@@ -1465,66 +1279,9 @@
             selectedRecords.clear();
             showBulkActions = false;
             updateBulkActionsVisibility();
-        }分更新失敗');
-                    // 這裡可以實現更複雜的錯誤處理
-                }
-            } else {
-                saveToLocalStorage();
-            }
-
-            selectedRecords.clear();
-            showBulkActions = false;
-            updateBulkActionsVisibility();
-            filterRecords();
         }
 
-        async function bulkDeleteRecords() {
-            if (selectedRecords.size === 0) return;
-
-            if (!confirm(`確定要刪除選中的 ${selectedRecords.size} 筆記錄嗎？`)) return;
-
-            const idsToDelete = Array.from(selectedRecords);
-            const deletedRecords = [];
-
-            // 刪除記錄
-            idsToDelete.forEach(id => {
-                const recordIndex = records.findIndex(r => r.id === id);
-                if (recordIndex !== -1) {
-                    deletedRecords.push({ index: recordIndex, record: records[recordIndex] });
-                    records.splice(recordIndex, 1);
-                }
-            });
-
-            // 同步到雲端
-            if (isOnlineMode) {
-                updateCloudStatus('syncing', '批量刪除中...');
-                let allSuccess = true;
-                
-                for (const id of idsToDelete) {
-                    const success = await deleteFromFirebase(id);
-                    if (!success) allSuccess = false;
-                }
-
-                if (allSuccess) {
-                    updateCloudStatus('online', '雲端同步');
-                } else {
-                    updateCloudStatus('offline', '部分刪除失敗');
-                    // 回滾變更
-                    deletedRecords.reverse().forEach(({index, record}) => {
-                        records.splice(index, 0, record);
-                    });
-                }
-            } else {
-                saveToLocalStorage();
-            }
-
-            selectedRecords.clear();
-            showBulkActions = false;
-            updateBulkActionsVisibility();
-            filterRecords();
-        }
-
-        // 匯出功能
+        // ==================== 匯出功能 ====================
         function toggleExportMenu() {
             const menu = document.getElementById('exportMenu');
             menu.classList.toggle('hidden');
@@ -1556,7 +1313,6 @@
             const pendingRecords = filteredRecords.filter(r => r.status === 'pending').length;
             const completionRate = totalRecords > 0 ? ((completedRecords / totalRecords) * 100).toFixed(1) : 0;
             
-            // 技術員統計
             const technicianStats = {};
             filteredRecords.forEach(record => {
                 if (!technicianStats[record.technician]) {
@@ -1570,7 +1326,6 @@
                 }
             });
 
-            // 品牌統計
             const modelStats = {};
             filteredRecords.forEach(record => {
                 if (!modelStats[record.model]) {
@@ -1604,7 +1359,6 @@ ${Object.entries(modelStats)
             document.getElementById('exportMenu').classList.add('hidden');
         }
 
-        // 下載檔案
         function downloadFile(content, filename, mimeType) {
             const blob = new Blob(['\uFEFF' + content], { type: mimeType + ';charset=utf-8;' });
             const link = document.createElement('a');
@@ -1617,7 +1371,86 @@ ${Object.entries(modelStats)
             URL.revokeObjectURL(url);
         }
 
-        // 跳轉到上次記錄
+        // ==================== 輔助函數 ====================
+        function syncData() {
+            console.log('手動同步資料');
+            if (isOnlineMode) {
+                updateCloudStatus('syncing', '同步中...');
+                
+                if (unsubscribe) {
+                    showSuccessNotification('資料已是最新狀態！');
+                    updateCloudStatus('online', '雲端同步 (即時)');
+                } else {
+                    setupRealtimeListener();
+                }
+            } else {
+                alert('請先設定 Firebase 才能使用雲端同步功能');
+            }
+        }
+
+        function showUpdateNotification() {
+            const notification = document.createElement('div');
+            notification.className = 'notification fixed bottom-4 right-4 bg-green-100 text-green-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
+            notification.innerHTML = `
+                <i data-lucide="refresh-cw" class="icon animate-spin"></i>
+                <span>資料已更新</span>
+            `;
+            document.body.appendChild(notification);
+            lucide.createIcons();
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 2000);
+        }
+
+        function showSuccessNotification(message) {
+            const notification = document.createElement('div');
+            notification.className = 'notification fixed top-20 right-4 bg-blue-100 text-blue-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
+            notification.innerHTML = `
+                <i data-lucide="check-circle" class="icon"></i>
+                <span>${message}</span>
+            `;
+            document.body.appendChild(notification);
+            lucide.createIcons();
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+        }
+
+        function toggleRowExpansion(id) {
+            const detailsRow = document.getElementById(`details-${id}`);
+            const expandIcon = document.querySelector(`[data-id="${id}"].expand-icon`);
+            
+            if (detailsRow.classList.contains('hidden')) {
+                document.querySelectorAll('[id^="details-"]').forEach(row => {
+                    row.classList.add('hidden');
+                });
+                document.querySelectorAll('.expand-icon').forEach(icon => {
+                    icon.setAttribute('data-lucide', 'chevron-right');
+                });
+                
+                detailsRow.classList.remove('hidden');
+                expandIcon.setAttribute('data-lucide', 'chevron-down');
+            } else {
+                detailsRow.classList.add('hidden');
+                expandIcon.setAttribute('data-lucide', 'chevron-right');
+            }
+            
+            lucide.createIcons();
+        }
+
+        function editRecord(id) {
+            const record = records.find(r => r.id === id);
+            if (!record) return;
+
+            const newStatus = record.status === 'pending' ? 'completed' : 'pending';
+            
+            if (confirm(`將記錄狀態改為 ${newStatus === 'completed' ? '已完成' : '未修'}？`)) {
+                updateRecordStatus(id, newStatus);
+            }
+        }
+
         function jumpToPreviousRecord(recordId) {
             const targetRecord = records.find(r => r.id === recordId);
             if (!targetRecord) return;
@@ -1626,12 +1459,10 @@ ${Object.entries(modelStats)
             const year = recordDate.getFullYear();
             const month = recordDate.getMonth() + 1;
             
-            // 如果是當月記錄，切換到本月視圖
             const currentDate = new Date();
             if (year === currentDate.getFullYear() && month === currentDate.getMonth() + 1) {
                 switchView('current');
             } else {
-                // 否則切換到歷史視圖並選擇對應年月
                 switchView('history');
                 expandedYears.add(year);
                 selectedPeriod = { year, month };
@@ -1639,10 +1470,8 @@ ${Object.entries(modelStats)
                 filterRecords();
             }
             
-            // 展開目標記錄
             setTimeout(() => {
                 toggleRowExpansion(recordId);
-                // 滾動到該記錄
                 const element = document.getElementById(`details-${recordId}`);
                 if (element) {
                     element.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1650,7 +1479,6 @@ ${Object.entries(modelStats)
             }, 500);
         }
 
-        // 防抖函數
         function debounce(func, wait) {
             let timeout;
             return function executedFunction(...args) {
@@ -1663,24 +1491,19 @@ ${Object.entries(modelStats)
             };
         }
 
-        // 點擊外部關閉選單
-        document.addEventListener('click', function(e) {
-            const exportMenu = document.getElementById('exportMenu');
-            const exportBtn = document.getElementById('exportBtn');
-            
-            if (!exportBtn.contains(e.target) && !exportMenu.contains(e.target)) {
-                exportMenu.classList.add('hidden');
-            }
-        });
+        // ==================== 全域函數（供 onclick 使用）====================
+        window.toggleRowExpansion = toggleRowExpansion;
+        window.editRecord = editRecord;
+        window.deleteRecord = deleteRecord;
+        window.jumpToPreviousRecord = jumpToPreviousRecord;
 
-        // 清理函數 - 在頁面關閉時取消監聽器
+        // ==================== 清理和網路監測 ====================
         window.addEventListener('beforeunload', () => {
             if (unsubscribe) {
                 unsubscribe();
             }
         });
 
-        // 網路狀態監測
         window.addEventListener('online', () => {
             console.log('網路已連接');
             if (isOnlineMode && !unsubscribe) {
@@ -1692,12 +1515,6 @@ ${Object.entries(modelStats)
             console.log('網路已斷開');
             updateCloudStatus('offline', '離線模式');
         });
-
-        // 將函數掛載到 window 對象，讓 onclick 可以訪問
-        window.toggleRowExpansion = toggleRowExpansion;
-        window.editRecord = editRecord;
-        window.deleteRecord = deleteRecord;
-        window.jumpToPreviousRecord = jumpToPreviousRecord;
     </script>
 </body>
 </html>
