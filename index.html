@@ -9,25 +9,25 @@
     <!-- Firebase SDK -->
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-        import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, orderBy, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
         
         // Firebase 配置 (你需要替換成自己的配置)
         const firebaseConfig = {
             // 這裡需要你的 Firebase 配置
             // 請到 Firebase Console 建立專案並取得配置
-            apiKey: "AIzaSyCbaX3ou68Xu4wOQe01X_czS_QvtUtmVaE",
-            authDomain: "shfix-ae293.firebaseapp.com",
-            projectId: "shfix-ae293",
-            storageBucket: "shfix-ae293.firebasestorage.app",
-            messagingSenderId: "786004133871",
-            appId: "1:786004133871:web:fc777aabac9d9e8fe0d81a"
+            apiKey: "你的API密鑰",
+            authDomain: "你的專案.firebaseapp.com",
+            projectId: "你的專案ID",
+            storageBucket: "你的專案.appspot.com",
+            messagingSenderId: "你的訊息發送者ID",
+            appId: "你的應用程式ID"
         };
 
         // 初始化 Firebase
         try {
             window.firebaseApp = initializeApp(firebaseConfig);
             window.db = getFirestore(window.firebaseApp);
-            window.firestore = { collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, orderBy };
+            window.firestore = { collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, orderBy, onSnapshot };
         } catch (error) {
             console.error('Firebase 初始化失敗:', error);
             window.firebaseApp = null;
@@ -351,6 +351,8 @@
         let selectedRecords = new Set();
         let showBulkActions = false;
         let isOnlineMode = false;
+        let unsubscribe = null; // 用於儲存 Firestore 監聽器
+        let lastUpdate = null; // 用於追蹤最後更新時間
 
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {
@@ -598,11 +600,81 @@
         async function loadRecords() {
             console.log('載入記錄...');
             if (isOnlineMode) {
-                await loadFromFirebase();
+                setupRealtimeListener();
             } else {
                 loadFromLocalStorage();
+                filterRecords();
             }
-            filterRecords();
+        }
+
+        // 設定即時監聽器
+        function setupRealtimeListener() {
+            // 如果已有監聽器，先取消
+            if (unsubscribe) {
+                unsubscribe();
+            }
+
+            try {
+                updateCloudStatus('syncing', '連接中...');
+                
+                const q = window.firestore.query(
+                    window.firestore.collection(window.db, 'records'),
+                    window.firestore.orderBy('date', 'desc')
+                );
+                
+                // 設定即時監聽器
+                unsubscribe = window.firestore.onSnapshot(q, 
+                    (querySnapshot) => {
+                        records = [];
+                        querySnapshot.forEach((doc) => {
+                            records.push({ id: doc.id, ...doc.data() });
+                        });
+                        
+                        console.log('即時更新：載入了', records.length, '筆記錄');
+                        lastUpdate = new Date();
+                        updateCloudStatus('online', '雲端同步 (即時)');
+                        
+                        // 更新顯示
+                        filterRecords();
+                        
+                        // 顯示更新提示
+                        showUpdateNotification();
+                    },
+                    (error) => {
+                        console.error('即時監聽失敗:', error);
+                        updateCloudStatus('offline', '連線中斷');
+                        
+                        // 嘗試重新連接
+                        setTimeout(() => {
+                            if (isOnlineMode) {
+                                setupRealtimeListener();
+                            }
+                        }, 5000);
+                    }
+                );
+                
+                console.log('即時監聽器已設定');
+            } catch (error) {
+                console.error('設定監聽器失敗:', error);
+                updateCloudStatus('offline', '連線失敗');
+                loadFromLocalStorage();
+            }
+        }
+
+        // 顯示更新通知
+        function showUpdateNotification() {
+            const notification = document.createElement('div');
+            notification.className = 'fixed bottom-4 right-4 bg-green-100 text-green-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
+            notification.innerHTML = `
+                <i data-lucide="refresh-cw" class="icon animate-spin"></i>
+                <span>資料已更新</span>
+            `;
+            document.body.appendChild(notification);
+            lucide.createIcons();
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 2000);
         }
 
         // 從 Firebase 載入
@@ -722,12 +794,18 @@
 
         // 同步資料
         async function syncData() {
-            console.log('執行同步資料');
+            console.log('手動同步資料');
             if (isOnlineMode) {
-                await loadFromFirebase();
-                filterRecords();
-                updateStats();
-                alert('資料同步完成！');
+                updateCloudStatus('syncing', '同步中...');
+                
+                // 如果有即時監聽器，資料應該已經是最新的
+                if (unsubscribe) {
+                    showSuccessNotification('資料已是最新狀態！');
+                    updateCloudStatus('online', '雲端同步 (即時)');
+                } else {
+                    // 重新設定監聽器
+                    setupRealtimeListener();
+                }
             } else {
                 alert('請先設定 Firebase 才能使用雲端同步功能');
             }
@@ -1100,7 +1178,9 @@
                 repairItem: document.getElementById('recordRepairItem').value,
                 supplement: document.getElementById('recordSupplement').value,
                 technician: document.getElementById('recordTechnician').value,
-                status: document.getElementById('recordStatus').value
+                status: document.getElementById('recordStatus').value,
+                createdAt: new Date().toISOString(), // 加入時間戳記
+                updatedAt: new Date().toISOString()
             };
 
             console.log('新增記錄:', formData);
@@ -1125,33 +1205,48 @@
                 formData.previousRecordId = existingRecord.id;
             }
 
-            // 生成 ID
-            const newId = 'record_' + Date.now();
-            const newRecord = { id: newId, ...formData };
-
             // 儲存到雲端或本地
             let success = true;
             if (isOnlineMode) {
                 updateCloudStatus('syncing', '上傳中...');
                 success = await addToFirebase(formData);
                 if (success) {
-                    updateCloudStatus('online', '雲端同步');
+                    updateCloudStatus('online', '雲端同步 (即時)');
+                    // 即時監聽器會自動更新資料，不需要手動更新
                 } else {
                     updateCloudStatus('offline', '上傳失敗');
                 }
+            } else {
+                // 離線模式
+                const newId = 'record_' + Date.now();
+                const newRecord = { id: newId, ...formData };
+                records.unshift(newRecord);
+                saveToLocalStorage();
+                filterRecords();
             }
 
-            if (success || !isOnlineMode) {
-                records.unshift(newRecord);
-                if (!isOnlineMode) {
-                    saveToLocalStorage();
-                }
-                filterRecords();
+            if (success) {
                 hideAddRecordModal();
-                alert('記錄新增成功！');
+                showSuccessNotification('記錄新增成功！');
             } else {
                 alert('新增失敗，請檢查網路連線');
             }
+        }
+
+        // 顯示成功通知
+        function showSuccessNotification(message) {
+            const notification = document.createElement('div');
+            notification.className = 'fixed top-20 right-4 bg-blue-100 text-blue-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
+            notification.innerHTML = `
+                <i data-lucide="check-circle" class="icon"></i>
+                <span>${message}</span>
+            `;
+            document.body.appendChild(notification);
+            lucide.createIcons();
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
         }
 
         // 編輯記錄
@@ -1172,54 +1267,56 @@
             const recordIndex = records.findIndex(r => r.id === id);
             if (recordIndex === -1) return;
 
-            const oldRecord = records[recordIndex];
-            records[recordIndex] = { ...oldRecord, status: newStatus };
-
             // 同步到雲端
             if (isOnlineMode) {
                 updateCloudStatus('syncing', '更新中...');
-                const success = await updateInFirebase(id, { status: newStatus });
+                const success = await updateInFirebase(id, { 
+                    status: newStatus,
+                    updatedAt: new Date().toISOString()
+                });
                 if (success) {
-                    updateCloudStatus('online', '雲端同步');
+                    updateCloudStatus('online', '雲端同步 (即時)');
+                    showSuccessNotification('狀態更新成功！');
                 } else {
                     updateCloudStatus('offline', '更新失敗');
-                    // 回滾變更
-                    records[recordIndex] = oldRecord;
+                    alert('更新失敗，請檢查網路連線');
                 }
             } else {
+                // 離線模式
+                const oldRecord = records[recordIndex];
+                records[recordIndex] = { ...oldRecord, status: newStatus };
                 saveToLocalStorage();
+                filterRecords();
+                showSuccessNotification('狀態更新成功！');
             }
-
-            filterRecords();
         }
 
         // 刪除記錄
         async function deleteRecord(id) {
             if (!confirm('確定要刪除此記錄嗎？')) return;
 
-            const recordIndex = records.findIndex(r => r.id === id);
-            if (recordIndex === -1) return;
-
-            const deletedRecord = records[recordIndex];
-            records.splice(recordIndex, 1);
-
             // 同步到雲端
             if (isOnlineMode) {
                 updateCloudStatus('syncing', '刪除中...');
                 const success = await deleteFromFirebase(id);
                 if (success) {
-                    updateCloudStatus('online', '雲端同步');
+                    updateCloudStatus('online', '雲端同步 (即時)');
+                    showSuccessNotification('記錄刪除成功！');
                 } else {
                     updateCloudStatus('offline', '刪除失敗');
-                    // 回滾變更
-                    records.splice(recordIndex, 0, deletedRecord);
+                    alert('刪除失敗，請檢查網路連線');
                 }
             } else {
-                saveToLocalStorage();
+                // 離線模式
+                const recordIndex = records.findIndex(r => r.id === id);
+                if (recordIndex !== -1) {
+                    records.splice(recordIndex, 1);
+                    saveToLocalStorage();
+                    selectedRecords.delete(id);
+                    filterRecords();
+                    showSuccessNotification('記錄刪除成功！');
+                }
             }
-
-            selectedRecords.delete(id);
-            filterRecords();
         }
 
         // 批量操作相關函數
@@ -1290,31 +1387,85 @@
 
             if (!confirm(`確定要將選中的 ${selectedRecords.size} 筆記錄標記為 ${newStatus === 'completed' ? '已完成' : '未修'}？`)) return;
 
-            // 批量更新
-            const updatedRecords = [];
-            selectedRecords.forEach(id => {
-                const recordIndex = records.findIndex(r => r.id === id);
-                if (recordIndex !== -1) {
-                    const oldStatus = records[recordIndex].status;
-                    records[recordIndex].status = newStatus;
-                    updatedRecords.push({ id, oldStatus });
-                }
-            });
-
             // 同步到雲端
             if (isOnlineMode) {
                 updateCloudStatus('syncing', '批量更新中...');
                 let allSuccess = true;
                 
-                for (const {id} of updatedRecords) {
-                    const success = await updateInFirebase(id, { status: newStatus });
+                for (const id of selectedRecords) {
+                    const success = await updateInFirebase(id, { 
+                        status: newStatus,
+                        updatedAt: new Date().toISOString()
+                    });
                     if (!success) allSuccess = false;
                 }
 
                 if (allSuccess) {
-                    updateCloudStatus('online', '雲端同步');
+                    updateCloudStatus('online', '雲端同步 (即時)');
+                    showSuccessNotification(`已更新 ${selectedRecords.size} 筆記錄！`);
                 } else {
                     updateCloudStatus('offline', '部分更新失敗');
+                    alert('部分更新失敗，請檢查網路連線');
+                }
+            } else {
+                // 離線模式
+                selectedRecords.forEach(id => {
+                    const recordIndex = records.findIndex(r => r.id === id);
+                    if (recordIndex !== -1) {
+                        records[recordIndex].status = newStatus;
+                    }
+                });
+                saveToLocalStorage();
+                filterRecords();
+                showSuccessNotification(`已更新 ${selectedRecords.size} 筆記錄！`);
+            }
+
+            selectedRecords.clear();
+            showBulkActions = false;
+            updateBulkActionsVisibility();
+        }
+
+        async function bulkDeleteRecords() {
+            if (selectedRecords.size === 0) return;
+
+            if (!confirm(`確定要刪除選中的 ${selectedRecords.size} 筆記錄嗎？`)) return;
+
+            const idsToDelete = Array.from(selectedRecords);
+
+            // 同步到雲端
+            if (isOnlineMode) {
+                updateCloudStatus('syncing', '批量刪除中...');
+                let allSuccess = true;
+                
+                for (const id of idsToDelete) {
+                    const success = await deleteFromFirebase(id);
+                    if (!success) allSuccess = false;
+                }
+
+                if (allSuccess) {
+                    updateCloudStatus('online', '雲端同步 (即時)');
+                    showSuccessNotification(`已刪除 ${idsToDelete.length} 筆記錄！`);
+                } else {
+                    updateCloudStatus('offline', '部分刪除失敗');
+                    alert('部分刪除失敗，請檢查網路連線');
+                }
+            } else {
+                // 離線模式
+                idsToDelete.forEach(id => {
+                    const recordIndex = records.findIndex(r => r.id === id);
+                    if (recordIndex !== -1) {
+                        records.splice(recordIndex, 1);
+                    }
+                });
+                saveToLocalStorage();
+                filterRecords();
+                showSuccessNotification(`已刪除 ${idsToDelete.length} 筆記錄！`);
+            }
+
+            selectedRecords.clear();
+            showBulkActions = false;
+            updateBulkActionsVisibility();
+        }分更新失敗');
                     // 這裡可以實現更複雜的錯誤處理
                 }
             } else {
@@ -1520,6 +1671,26 @@ ${Object.entries(modelStats)
             if (!exportBtn.contains(e.target) && !exportMenu.contains(e.target)) {
                 exportMenu.classList.add('hidden');
             }
+        });
+
+        // 清理函數 - 在頁面關閉時取消監聽器
+        window.addEventListener('beforeunload', () => {
+            if (unsubscribe) {
+                unsubscribe();
+            }
+        });
+
+        // 網路狀態監測
+        window.addEventListener('online', () => {
+            console.log('網路已連接');
+            if (isOnlineMode && !unsubscribe) {
+                setupRealtimeListener();
+            }
+        });
+
+        window.addEventListener('offline', () => {
+            console.log('網路已斷開');
+            updateCloudStatus('offline', '離線模式');
         });
 
         // 將函數掛載到 window 對象，讓 onclick 可以訪問
