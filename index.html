@@ -5,16 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>維修記錄管理系統</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-    <!-- Firebase SDK -->
+    
+    <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-        import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, orderBy, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, orderBy, onSnapshot, enableNetwork, disableNetwork } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
         
-        // Firebase 配置 (你需要替換成自己的配置)
+        // Firebase 配置 - 請替換為你的 Firebase 項目配置
         const firebaseConfig = {
-            // 這裡需要你的 Firebase 配置
-            // 請到 Firebase Console 建立專案並取得配置
             apiKey: "AIzaSyCbaX3ou68Xu4wOQe01X_czS_QvtUtmVaE",
             authDomain: "shfix-ae293.firebaseapp.com",
             projectId: "shfix-ae293",
@@ -24,47 +23,55 @@
         };
 
         // 初始化 Firebase
-        try {
-            window.firebaseApp = initializeApp(firebaseConfig);
-            window.db = getFirestore(window.firebaseApp);
-            window.firestore = { collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, orderBy, onSnapshot };
-            console.log('Firebase 初始化成功');
-        } catch (error) {
-            console.error('Firebase 初始化失敗:', error);
-            window.firebaseApp = null;
-            window.db = null;
-        }
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        
+        // 將 Firebase 實例掛載到 window 對象
+        window.firebaseAuth = auth;
+        window.firebaseDb = db;
+        window.firebaseModules = {
+            signInAnonymously,
+            onAuthStateChanged,
+            signOut,
+            collection,
+            addDoc,
+            updateDoc,
+            deleteDoc,
+            doc,
+            getDocs,
+            query,
+            orderBy,
+            onSnapshot,
+            enableNetwork,
+            disableNetwork
+        };
     </script>
+    
     <style>
-        .icon { width: 16px; height: 16px; }
-        .icon-lg { width: 20px; height: 20px; }
-        .icon-xl { width: 32px; height: 32px; }
-        
-        /* 移除按鈕點擊後的藍色邊框 */
-        button:focus:not(:focus-visible) {
-            outline: none;
-        }
-        
-        /* 保留鍵盤導航時的焦點樣式 */
-        button:focus-visible {
-            outline: 2px solid #3B82F6;
-            outline-offset: 2px;
-        }
-        
-        /* 動畫效果 */
+        .icon { width: 16px; height: 16px; display: inline-block; }
+        .icon-lg { width: 20px; height: 20px; display: inline-block; }
+        .icon-xl { width: 32px; height: 32px; display: inline-block; }
+        button:focus:not(:focus-visible) { outline: none; }
+        button:focus-visible { outline: 2px solid #3B82F6; outline-offset: 2px; }
+        .notification { animation: slideIn 0.3s ease-out; }
         @keyframes slideIn {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
         }
-        
-        .notification {
-            animation: slideIn 0.3s ease-out;
+        .sync-indicator {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
     </style>
 </head>
@@ -72,16 +79,17 @@
     <!-- 雲端狀態指示器 -->
     <div id="cloudStatus" class="fixed top-4 right-4 z-50 px-3 py-2 rounded-lg text-sm font-medium shadow-lg bg-gray-100 text-gray-800">
         <div class="flex items-center gap-2">
-            <div id="cloudIcon"><i data-lucide="cloud-off" class="icon"></i></div>
-            <span id="cloudText">連接中...</span>
+            <span id="cloudIcon">☁️</span>
+            <span id="cloudText">連線中...</span>
         </div>
     </div>
 
-    <!-- 最後更新時間 -->
-    <div id="lastUpdateTime" class="fixed top-4 left-4 z-40 px-3 py-2 rounded-lg text-xs bg-gray-50 text-gray-600 shadow-md hidden">
+    <!-- 登入狀態指示器 -->
+    <div id="authStatus" class="fixed top-4 left-4 z-50 px-3 py-2 rounded-lg text-sm font-medium shadow-lg bg-blue-100 text-blue-800 hidden">
         <div class="flex items-center gap-2">
-            <i data-lucide="clock" class="icon"></i>
-            <span id="updateTimeText">最後更新: --</span>
+            <span>👤</span>
+            <span id="authText">未登入</span>
+            <button id="signOutBtn" class="ml-2 text-xs underline hover:no-underline hidden">登出</button>
         </div>
     </div>
 
@@ -89,8 +97,23 @@
         <div class="max-w-7xl mx-auto">
             <!-- 標題區域 -->
             <div class="mb-8">
-                <h1 class="text-3xl font-bold text-gray-900 mb-2">維修記錄管理系統</h1>
-                <p class="text-gray-600">設備維修記錄追蹤與管理 - 雲端同步版本</p>
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-3">
+                            維修記錄管理系統
+                            <span id="syncIndicator" class="hidden sync-indicator">🔄</span>
+                        </h1>
+                        <p class="text-gray-600">設備維修記錄追蹤與管理 - 雲端同步版本</p>
+                    </div>
+                    <div class="flex gap-3">
+                        <button id="syncBtn" class="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                            🔄 手動同步
+                        </button>
+                        <button id="settingsBtn" class="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors">
+                            ⚙️ 系統設定
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <!-- 視圖切換按鈕 -->
@@ -98,12 +121,10 @@
                 <div class="flex justify-center">
                     <div class="flex gap-3">
                         <button id="currentViewBtn" class="flex items-center gap-2 px-6 py-3 rounded-lg transition-colors border view-btn bg-blue-600 text-white border-blue-600" data-view="current">
-                            <i data-lucide="home" class="icon-lg"></i>
-                            本月記錄
+                            🏠 本月記錄
                         </button>
                         <button id="historyViewBtn" class="flex items-center gap-2 px-6 py-3 rounded-lg transition-colors border view-btn bg-white text-gray-700 border-gray-300 hover:bg-gray-50" data-view="history">
-                            <i data-lucide="archive" class="icon-lg"></i>
-                            歷史記錄
+                            📁 歷史記錄
                         </button>
                     </div>
                 </div>
@@ -121,14 +142,14 @@
                     <!-- 搜尋區域 -->
                     <div class="flex-1 max-w-md">
                         <div class="relative">
-                            <i data-lucide="search" class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 icon"></i>
+                            <span class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400">🔍</span>
                             <input id="searchInput" type="text" placeholder="搜尋登記資料、機型、序號或維修項目..." 
                                    class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                         </div>
                     </div>
 
                     <!-- 控制按鈕 -->
-                    <div class="flex gap-3">
+                    <div class="flex gap-3 flex-wrap">
                         <select id="statusFilter" class="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                             <option value="all">所有狀態</option>
                             <option value="pending">未修</option>
@@ -137,42 +158,18 @@
 
                         <select id="technicianFilter" class="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                             <option value="all">所有技術員</option>
-                            <option value="曾">曾</option>
-                            <option value="李">李</option>
                         </select>
 
                         <button id="addRecordBtn" class="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-                            <i data-lucide="plus" class="icon"></i>
-                            新增記錄
+                            ➕ 新增記錄
                         </button>
 
-                        <div class="relative">
-                            <button id="exportBtn" class="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors hidden">
-                                <i data-lucide="download" class="icon"></i>
-                                匯出報表
-                            </button>
-                            <div id="exportMenu" class="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-lg border z-50 hidden">
-                                <div class="p-2">
-                                    <button id="exportCSV" class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 rounded text-sm">
-                                        <i data-lucide="file-text" class="icon text-blue-500"></i>
-                                        匯出 CSV 檔案
-                                    </button>
-                                    <button id="exportStats" class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 rounded text-sm">
-                                        <i data-lucide="bar-chart-3" class="icon text-green-500"></i>
-                                        匯出統計報表
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
+                        <button id="exportBtn" class="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors hidden">
+                            📥 匯出報表
+                        </button>
 
                         <button id="bulkActionsBtn" class="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors border bg-white text-gray-700 border-gray-300 hover:bg-gray-50 hidden">
-                            <i data-lucide="settings" class="icon"></i>
-                            批量操作
-                        </button>
-
-                        <button id="syncBtn" class="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors" title="手動同步資料">
-                            <i data-lucide="refresh-cw" class="icon"></i>
-                            <span class="hidden sm:inline">同步資料</span>
+                            ⚙️ 批量操作
                         </button>
                     </div>
                 </div>
@@ -191,30 +188,27 @@
                     
                     <div id="bulkButtons" class="flex gap-2 hidden">
                         <button id="bulkCompleteBtn" class="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm">
-                            <i data-lucide="check-circle" class="icon"></i>
-                            標記已完成
+                            ✓ 標記已完成
                         </button>
                         <button id="bulkPendingBtn" class="flex items-center gap-2 px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm">
-                            <i data-lucide="x" class="icon"></i>
-                            標記未修
+                            ✗ 標記未修
                         </button>
                         <button id="bulkDeleteBtn" class="flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm">
-                            <i data-lucide="trash-2" class="icon"></i>
-                            批量刪除
+                            🗑️ 批量刪除
                         </button>
                     </div>
                 </div>
             </div>
 
             <!-- 統計卡片 -->
-            <div id="statsCards" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                 <div class="bg-white rounded-lg shadow-sm border p-4">
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-sm text-gray-600">未修</p>
                             <p id="pendingCount" class="text-2xl font-bold text-gray-900">0</p>
                         </div>
-                        <i data-lucide="x" class="icon-xl text-gray-400"></i>
+                        <span class="text-3xl">✗</span>
                     </div>
                 </div>
                 <div class="bg-white rounded-lg shadow-sm border p-4">
@@ -223,7 +217,25 @@
                             <p class="text-sm text-gray-600">已完成</p>
                             <p id="completedCount" class="text-2xl font-bold text-gray-900">0</p>
                         </div>
-                        <i data-lucide="check-circle" class="icon-xl text-gray-400"></i>
+                        <span class="text-3xl">✓</span>
+                    </div>
+                </div>
+                <div class="bg-white rounded-lg shadow-sm border p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-gray-600">雲端記錄</p>
+                            <p id="cloudRecordCount" class="text-2xl font-bold text-gray-900">0</p>
+                        </div>
+                        <span class="text-3xl">☁️</span>
+                    </div>
+                </div>
+                <div class="bg-white rounded-lg shadow-sm border p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-gray-600">同步狀態</p>
+                            <p id="syncStatus" class="text-sm font-bold text-green-600">已同步</p>
+                        </div>
+                        <span id="syncStatusIcon" class="text-3xl">✅</span>
                     </div>
                 </div>
             </div>
@@ -247,6 +259,99 @@
                     </table>
                     <div id="noRecords" class="text-center py-12 hidden">
                         <p class="text-gray-500">沒有維修記錄</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 設定頁面模態框 -->
+    <div id="settingsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 hidden">
+        <div class="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="p-6">
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-xl font-semibold text-gray-900">系統設定</h3>
+                    <button id="closeSettingsBtn" class="text-gray-400 hover:text-gray-600 text-2xl">
+                        ×
+                    </button>
+                </div>
+
+                <!-- Firebase 連線狀態 -->
+                <div class="mb-8">
+                    <h4 class="text-lg font-medium text-gray-900 mb-4 flex items-center gap-2">
+                        ☁️ Firebase 雲端同步
+                    </h4>
+                    
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <div>
+                                <span class="font-medium">連線狀態</span>
+                                <p class="text-sm text-gray-600" id="firebaseStatus">檢查中...</p>
+                            </div>
+                            <div class="flex gap-2">
+                                <button id="reconnectBtn" class="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 transition-colors">
+                                    重新連線
+                                </button>
+                                <button id="goOfflineBtn" class="px-3 py-1 bg-gray-600 text-white rounded text-sm hover:bg-gray-700 transition-colors">
+                                    離線模式
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <div>
+                                <span class="font-medium">自動同步</span>
+                                <p class="text-sm text-gray-600">資料變更時自動上傳到雲端</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input id="autoSyncToggle" type="checkbox" class="sr-only peer" checked>
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 技術員管理 -->
+                <div class="mb-8">
+                    <h4 class="text-lg font-medium text-gray-900 mb-4 flex items-center gap-2">
+                        👥 技術員管理
+                    </h4>
+                    
+                    <!-- 新增技術員 -->
+                    <div class="mb-4">
+                        <div class="flex gap-2">
+                            <input id="newTechnicianInput" type="text" 
+                                   placeholder="輸入新技術員名稱" 
+                                   class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <button id="addTechnicianBtn" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                                ➕
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 技術員列表 -->
+                    <div id="techniciansList" class="space-y-2 max-h-60 overflow-y-auto">
+                    </div>
+                </div>
+
+                <!-- 資料管理 -->
+                <div class="mb-8">
+                    <h4 class="text-lg font-medium text-gray-900 mb-4 flex items-center gap-2">
+                        💾 資料管理
+                    </h4>
+                    
+                    <div class="space-y-3">
+                        <button id="forceSync" class="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                            🔄 強制同步所有資料
+                        </button>
+                        
+                        <button id="clearLocalDataBtn" class="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">
+                            🗑️ 清除本地資料
+                        </button>
+                        
+                        <p class="text-sm text-gray-600">
+                            注意：清除本地資料後，將從雲端重新載入。如需完全刪除資料，請聯繫管理員。
+                        </p>
                     </div>
                 </div>
             </div>
@@ -287,8 +392,6 @@
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">技術員</label>
                             <select id="recordTechnician" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" required>
-                                <option value="曾">曾</option>
-                                <option value="李">李</option>
                             </select>
                         </div>
                         <div>
@@ -312,61 +415,16 @@
         </div>
     </div>
 
-    <!-- Firebase 設定說明模態框 -->
-    <div id="firebaseModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 hidden">
-        <div class="bg-white rounded-lg max-w-2xl w-full">
-            <div class="p-6">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">🔧 Firebase 設定說明</h3>
-                <div class="space-y-4 text-sm">
-                    <p class="text-gray-600">要使用雲端同步功能，請按照以下步驟設定 Firebase：</p>
-                    
-                    <div class="bg-blue-50 p-4 rounded-lg">
-                        <h4 class="font-medium text-blue-900 mb-2">步驟 1: 建立 Firebase 專案</h4>
-                        <ol class="list-decimal list-inside space-y-1 text-blue-800">
-                            <li>前往 <a href="https://console.firebase.google.com" target="_blank" class="underline">Firebase Console</a></li>
-                            <li>點擊「建立專案」</li>
-                            <li>輸入專案名稱，例如「repair-system」</li>
-                            <li>完成專案建立</li>
-                        </ol>
-                    </div>
-                    
-                    <div class="bg-green-50 p-4 rounded-lg">
-                        <h4 class="font-medium text-green-900 mb-2">步驟 2: 設定 Firestore 資料庫</h4>
-                        <ol class="list-decimal list-inside space-y-1 text-green-800">
-                            <li>在 Firebase Console 左側選單點擊「Firestore Database」</li>
-                            <li>點擊「建立資料庫」</li>
-                            <li>選擇「測試模式」開始</li>
-                            <li>選擇伺服器位置（建議選亞洲）</li>
-                        </ol>
-                    </div>
-                    
-                    <div class="bg-orange-50 p-4 rounded-lg">
-                        <h4 class="font-medium text-orange-900 mb-2">步驟 3: 取得設定金鑰</h4>
-                        <ol class="list-decimal list-inside space-y-1 text-orange-800">
-                            <li>點擊專案設定（齒輪圖示）</li>
-                            <li>選擇「專案設定」</li>
-                            <li>在「一般」頁籤中，點擊「新增應用程式」選擇網頁</li>
-                            <li>複製 Firebase 設定代碼</li>
-                            <li>將設定代碼貼到本檔案第 13-20 行</li>
-                        </ol>
-                    </div>
-                    
-                    <p class="text-red-600 font-medium">⚠️ 設定完成前，雲端同步功能無法使用，資料將暫存在本地瀏覽器中。</p>
-                </div>
-                
-                <div class="flex gap-3 mt-6">
-                    <button id="useOfflineBtn" type="button" class="flex-1 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors">
-                        暫時離線使用
-                    </button>
-                    <button id="closeFirebaseModal" type="button" class="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
-                        我已完成設定
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
+    <script type="module">
+        // ==================== Firebase 相關變數 ====================
+        let isOnline = navigator.onLine;
+        let isFirebaseConnected = false;
+        let autoSyncEnabled = true;
+        let currentUser = null;
+        let recordsListener = null;
+        let techniciansListener = null;
+        let pendingOperations = [];
 
-    <script>
         // ==================== 全域變數 ====================
         let records = [];
         let filteredRecords = [];
@@ -375,125 +433,464 @@
         let expandedYears = new Set();
         let selectedRecords = new Set();
         let showBulkActions = false;
-        let isOnlineMode = false;
-        let unsubscribe = null;
-        let lastUpdate = null;
+        let technicians = ['曾', '李'];
 
         // ==================== 初始化 ====================
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('DOM 載入完成，開始初始化...');
-            
-            // 初始化 Lucide 圖示
-            lucide.createIcons();
+            console.log('系統初始化中...');
             
             // 設定今天的日期
-            const today = new Date().toISOString().split('T')[0];
-            const dateInput = document.getElementById('recordDate');
-            if (dateInput) {
-                dateInput.value = today;
-            }
-            
-            // 延遲檢查 Firebase 配置
-            setTimeout(() => {
-                checkFirebaseConfig();
-            }, 500);
+            document.getElementById('recordDate').value = new Date().toISOString().split('T')[0];
             
             // 綁定事件監聽器
             bindEventListeners();
             
-            // 載入資料
-            loadRecords();
+            // 監聽網路狀態
+            window.addEventListener('online', handleOnline);
+            window.addEventListener('offline', handleOffline);
+            
+            // 初始化 Firebase
+            setTimeout(initializeFirebase, 1000);
+            
+            // 載入本地資料（Firebase 未連線前的備用）
+            loadLocalData();
             
             // 更新視圖
             updateCurrentView();
         });
 
-        // ==================== Firebase 相關函數 ====================
-        function checkFirebaseConfig() {
-            console.log('檢查 Firebase 配置...');
+        // ==================== Firebase 初始化 ====================
+        async function initializeFirebase() {
             try {
-                if (window.firebaseApp && window.db && window.firebaseApp.options.apiKey !== "你的API密鑰") {
-                    console.log('Firebase 已正確配置');
-                    document.getElementById('firebaseModal').classList.add('hidden');
-                    updateCloudStatus('online', '雲端同步');
-                    isOnlineMode = true;
-                } else {
-                    throw new Error('Firebase not configured');
+                console.log('初始化 Firebase...');
+                updateCloudStatus('connecting', '連線中...');
+                
+                // 身份驗證
+                const { onAuthStateChanged, signInAnonymously } = window.firebaseModules;
+                const auth = window.firebaseAuth;
+                
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        console.log('用戶已登入:', user.uid);
+                        currentUser = user;
+                        updateAuthStatus(true, user.uid);
+                        await initializeFirestoreListeners();
+                        updateCloudStatus('connected', '已連線');
+                        isFirebaseConnected = true;
+                        
+                        // 執行待處理的操作
+                        await processPendingOperations();
+                    } else {
+                        console.log('用戶未登入，嘗試匿名登入...');
+                        try {
+                            await signInAnonymously(auth);
+                        } catch (error) {
+                            console.error('匿名登入失敗:', error);
+                            handleFirebaseError(error);
+                        }
+                    }
+                });
+                
+            } catch (error) {
+                console.error('Firebase 初始化失敗:', error);
+                handleFirebaseError(error);
+            }
+        }
+
+        // ==================== Firestore 監聽器設置 ====================
+        async function initializeFirestoreListeners() {
+            try {
+                const { collection, onSnapshot, query, orderBy } = window.firebaseModules;
+                const db = window.firebaseDb;
+                
+                // 監聽維修記錄變化
+                const recordsQuery = query(collection(db, 'repairRecords'), orderBy('createdAt', 'desc'));
+                recordsListener = onSnapshot(recordsQuery, (snapshot) => {
+                    console.log('收到 Firestore 記錄更新');
+                    const cloudRecords = [];
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        cloudRecords.push({
+                            id: doc.id,
+                            ...data,
+                            firebaseId: doc.id
+                        });
+                    });
+                    
+                    // 合併雲端資料與本地資料
+                    mergeCloudRecords(cloudRecords);
+                    filterRecords();
+                    updateCloudRecordCount(cloudRecords.length);
+                }, (error) => {
+                    console.error('記錄監聽錯誤:', error);
+                    handleFirebaseError(error);
+                });
+
+                // 監聽技術員列表變化
+                const techniciansQuery = query(collection(db, 'technicians'));
+                techniciansListener = onSnapshot(techniciansQuery, (snapshot) => {
+                    console.log('收到 Firestore 技術員更新');
+                    const cloudTechnicians = [];
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        cloudTechnicians.push(data.name);
+                    });
+                    
+                    if (cloudTechnicians.length > 0) {
+                        technicians = [...new Set([...technicians, ...cloudTechnicians])].sort();
+                        saveTechniciansToLocal();
+                        updateTechnicianOptions();
+                    }
+                }, (error) => {
+                    console.error('技術員監聽錯誤:', error);
+                    handleFirebaseError(error);
+                });
+
+            } catch (error) {
+                console.error('設置 Firestore 監聽器失敗:', error);
+                handleFirebaseError(error);
+            }
+        }
+
+        // ==================== 雲端資料合併 ====================
+        function mergeCloudRecords(cloudRecords) {
+            const localIds = new Set(records.map(r => r.id));
+            const cloudIds = new Set(cloudRecords.map(r => r.id));
+            
+            // 添加雲端獨有的記錄
+            cloudRecords.forEach(cloudRecord => {
+                if (!localIds.has(cloudRecord.id)) {
+                    records.push(cloudRecord);
+                }
+            });
+            
+            // 更新已存在的記錄
+            records = records.map(localRecord => {
+                const cloudRecord = cloudRecords.find(cr => cr.id === localRecord.id);
+                if (cloudRecord && cloudRecord.updatedAt && localRecord.updatedAt) {
+                    // 比較更新時間，使用最新的版本
+                    return new Date(cloudRecord.updatedAt) > new Date(localRecord.updatedAt) 
+                        ? cloudRecord : localRecord;
+                }
+                return cloudRecord || localRecord;
+            });
+            
+            saveToLocalStorage();
+        }
+
+        // ==================== Firebase 資料操作 ====================
+        async function addRecordToFirebase(record) {
+            if (!isFirebaseConnected || !currentUser) {
+                addToPendingOperations('add', record);
+                return null;
+            }
+
+            try {
+                showSyncIndicator();
+                const { collection, addDoc } = window.firebaseModules;
+                const db = window.firebaseDb;
+                
+                const recordData = {
+                    ...record,
+                    userId: currentUser.uid,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+                
+                const docRef = await addDoc(collection(db, 'repairRecords'), recordData);
+                console.log('記錄已上傳到 Firebase:', docRef.id);
+                
+                hideSyncIndicator();
+                updateSyncStatus('已同步', true);
+                return docRef.id;
+            } catch (error) {
+                console.error('上傳記錄失敗:', error);
+                addToPendingOperations('add', record);
+                handleFirebaseError(error);
+                hideSyncIndicator();
+                return null;
+            }
+        }
+
+        async function updateRecordInFirebase(record) {
+            if (!isFirebaseConnected || !currentUser || !record.firebaseId) {
+                addToPendingOperations('update', record);
+                return;
+            }
+
+            try {
+                showSyncIndicator();
+                const { doc, updateDoc } = window.firebaseModules;
+                const db = window.firebaseDb;
+                
+                const recordData = {
+                    ...record,
+                    updatedAt: new Date().toISOString()
+                };
+                delete recordData.firebaseId;
+                
+                await updateDoc(doc(db, 'repairRecords', record.firebaseId), recordData);
+                console.log('記錄已在 Firebase 中更新:', record.firebaseId);
+                
+                hideSyncIndicator();
+                updateSyncStatus('已同步', true);
+            } catch (error) {
+                console.error('更新記錄失敗:', error);
+                addToPendingOperations('update', record);
+                handleFirebaseError(error);
+                hideSyncIndicator();
+            }
+        }
+
+        async function deleteRecordFromFirebase(firebaseId) {
+            if (!isFirebaseConnected || !currentUser || !firebaseId) {
+                addToPendingOperations('delete', { firebaseId });
+                return;
+            }
+
+            try {
+                showSyncIndicator();
+                const { doc, deleteDoc } = window.firebaseModules;
+                const db = window.firebaseDb;
+                
+                await deleteDoc(doc(db, 'repairRecords', firebaseId));
+                console.log('記錄已從 Firebase 中刪除:', firebaseId);
+                
+                hideSyncIndicator();
+                updateSyncStatus('已同步', true);
+            } catch (error) {
+                console.error('刪除記錄失敗:', error);
+                addToPendingOperations('delete', { firebaseId });
+                handleFirebaseError(error);
+                hideSyncIndicator();
+            }
+        }
+
+        async function syncTechniciansToFirebase() {
+            if (!isFirebaseConnected || !currentUser) {
+                return;
+            }
+
+            try {
+                const { collection, getDocs, addDoc } = window.firebaseModules;
+                const db = window.firebaseDb;
+                
+                // 獲取現有技術員
+                const snapshot = await getDocs(collection(db, 'technicians'));
+                const existingTechnicians = new Set();
+                snapshot.forEach(doc => {
+                    existingTechnicians.add(doc.data().name);
+                });
+
+                // 添加新技術員
+                for (const techName of technicians) {
+                    if (!existingTechnicians.has(techName)) {
+                        await addDoc(collection(db, 'technicians'), {
+                            name: techName,
+                            userId: currentUser.uid,
+                            createdAt: new Date().toISOString()
+                        });
+                        console.log('技術員已上傳:', techName);
+                    }
                 }
             } catch (error) {
-                console.log('Firebase 未配置，顯示設定說明');
-                document.getElementById('firebaseModal').classList.remove('hidden');
-                updateCloudStatus('offline', '離線模式');
-                isOnlineMode = false;
+                console.error('同步技術員失敗:', error);
+                handleFirebaseError(error);
             }
         }
 
-        // ==================== UI 更新函數 ====================
+        // ==================== 待處理操作管理 ====================
+        function addToPendingOperations(operation, data) {
+            pendingOperations.push({
+                operation,
+                data,
+                timestamp: new Date().toISOString()
+            });
+            updateSyncStatus('待同步', false);
+            savePendingOperations();
+        }
+
+        async function processPendingOperations() {
+            if (!isFirebaseConnected || pendingOperations.length === 0) {
+                return;
+            }
+
+            console.log(`處理 ${pendingOperations.length} 個待處理操作`);
+            showSyncIndicator();
+
+            for (const op of pendingOperations) {
+                try {
+                    switch (op.operation) {
+                        case 'add':
+                            await addRecordToFirebase(op.data);
+                            break;
+                        case 'update':
+                            await updateRecordInFirebase(op.data);
+                            break;
+                        case 'delete':
+                            await deleteRecordFromFirebase(op.data.firebaseId);
+                            break;
+                    }
+                } catch (error) {
+                    console.error('處理待處理操作失敗:', error);
+                }
+            }
+
+            pendingOperations = [];
+            savePendingOperations();
+            hideSyncIndicator();
+            updateSyncStatus('已同步', true);
+            showSuccessNotification('離線操作已同步到雲端！');
+        }
+
+        function savePendingOperations() {
+            localStorage.setItem('pendingOperations', JSON.stringify(pendingOperations));
+        }
+
+        function loadPendingOperations() {
+            const saved = localStorage.getItem('pendingOperations');
+            if (saved) {
+                pendingOperations = JSON.parse(saved);
+            }
+        }
+
+        // ==================== 狀態更新函數 ====================
         function updateCloudStatus(status, text) {
-            const statusEl = document.getElementById('cloudStatus');
-            const iconEl = document.getElementById('cloudIcon');
-            const textEl = document.getElementById('cloudText');
-            const updateTimeEl = document.getElementById('lastUpdateTime');
-            const updateTimeTextEl = document.getElementById('updateTimeText');
+            const cloudIcon = document.getElementById('cloudIcon');
+            const cloudText = document.getElementById('cloudText');
             
-            statusEl.className = 'fixed top-4 right-4 z-50 px-3 py-2 rounded-lg text-sm font-medium shadow-lg';
-            
-            if (status === 'online') {
-                statusEl.classList.add('bg-green-100', 'text-green-800');
-                iconEl.innerHTML = '<i data-lucide="cloud-check" class="icon"></i>';
-                
-                if (lastUpdate) {
-                    updateTimeEl.classList.remove('hidden');
-                    updateTimeTextEl.textContent = `最後更新: ${formatUpdateTime(lastUpdate)}`;
-                }
-            } else if (status === 'syncing') {
-                statusEl.classList.add('bg-blue-100', 'text-blue-800');
-                iconEl.innerHTML = '<i data-lucide="cloud-upload" class="icon animate-pulse"></i>';
-            } else {
-                statusEl.classList.add('bg-gray-100', 'text-gray-800');
-                iconEl.innerHTML = '<i data-lucide="cloud-off" class="icon"></i>';
-                updateTimeEl.classList.add('hidden');
+            switch (status) {
+                case 'connecting':
+                    cloudIcon.textContent = '🔄';
+                    cloudIcon.classList.add('sync-indicator');
+                    document.getElementById('cloudStatus').className = 'fixed top-4 right-4 z-50 px-3 py-2 rounded-lg text-sm font-medium shadow-lg bg-yellow-100 text-yellow-800';
+                    break;
+                case 'connected':
+                    cloudIcon.textContent = '☁️';
+                    cloudIcon.classList.remove('sync-indicator');
+                    document.getElementById('cloudStatus').className = 'fixed top-4 right-4 z-50 px-3 py-2 rounded-lg text-sm font-medium shadow-lg bg-green-100 text-green-800';
+                    break;
+                case 'offline':
+                    cloudIcon.textContent = '📱';
+                    cloudIcon.classList.remove('sync-indicator');
+                    document.getElementById('cloudStatus').className = 'fixed top-4 right-4 z-50 px-3 py-2 rounded-lg text-sm font-medium shadow-lg bg-gray-100 text-gray-800';
+                    break;
+                case 'error':
+                    cloudIcon.textContent = '⚠️';
+                    cloudIcon.classList.remove('sync-indicator');
+                    document.getElementById('cloudStatus').className = 'fixed top-4 right-4 z-50 px-3 py-2 rounded-lg text-sm font-medium shadow-lg bg-red-100 text-red-800';
+                    break;
             }
             
-            textEl.textContent = text;
-            lucide.createIcons();
+            cloudText.textContent = text;
         }
 
-        function formatUpdateTime(date) {
-            const now = new Date();
-            const diff = now - date;
+        function updateAuthStatus(isLoggedIn, userId) {
+            const authStatus = document.getElementById('authStatus');
+            const authText = document.getElementById('authText');
+            const signOutBtn = document.getElementById('signOutBtn');
             
-            if (diff < 60000) {
-                return '剛剛';
-            } else if (diff < 3600000) {
-                const minutes = Math.floor(diff / 60000);
-                return `${minutes} 分鐘前`;
-            } else if (diff < 86400000) {
-                const hours = Math.floor(diff / 3600000);
-                return `${hours} 小時前`;
+            if (isLoggedIn) {
+                authStatus.classList.remove('hidden');
+                authText.textContent = `已登入 (${userId.substring(0, 8)}...)`;
+                signOutBtn.classList.remove('hidden');
             } else {
-                return date.toLocaleString('zh-TW', { 
-                    month: 'numeric', 
-                    day: 'numeric', 
-                    hour: '2-digit', 
-                    minute: '2-digit' 
-                });
+                authStatus.classList.add('hidden');
+                signOutBtn.classList.add('hidden');
             }
         }
 
-        // 定期更新時間顯示
-        setInterval(() => {
-            if (lastUpdate && isOnlineMode) {
-                const updateTimeTextEl = document.getElementById('updateTimeText');
-                if (updateTimeTextEl) {
-                    updateTimeTextEl.textContent = `最後更新: ${formatUpdateTime(lastUpdate)}`;
-                }
+        function updateSyncStatus(status, isGood) {
+            document.getElementById('syncStatus').textContent = status;
+            document.getElementById('syncStatusIcon').textContent = isGood ? '✅' : '⏳';
+            document.getElementById('syncStatus').className = `text-sm font-bold ${isGood ? 'text-green-600' : 'text-orange-600'}`;
+        }
+
+        function updateCloudRecordCount(count) {
+            document.getElementById('cloudRecordCount').textContent = count;
+        }
+
+        function showSyncIndicator() {
+            document.getElementById('syncIndicator').classList.remove('hidden');
+        }
+
+        function hideSyncIndicator() {
+            document.getElementById('syncIndicator').classList.add('hidden');
+        }
+
+        // ==================== 網路狀態處理 ====================
+        function handleOnline() {
+            console.log('網路已連線');
+            isOnline = true;
+            if (isFirebaseConnected) {
+                updateCloudStatus('connected', '已連線');
+                processPendingOperations();
+            } else {
+                initializeFirebase();
             }
-        }, 30000);
+        }
+
+        function handleOffline() {
+            console.log('網路已斷線');
+            isOnline = false;
+            updateCloudStatus('offline', '離線模式');
+        }
+
+        function handleFirebaseError(error) {
+            console.error('Firebase 錯誤:', error);
+            isFirebaseConnected = false;
+            updateCloudStatus('error', '連線錯誤');
+            
+            // 根據錯誤類型顯示不同訊息
+            if (error.code === 'permission-denied') {
+                showErrorNotification('權限不足，請聯繫管理員');
+            } else if (error.code === 'unavailable') {
+                showErrorNotification('Firebase 服務暫時無法使用');
+            } else {
+                showErrorNotification('雲端同步發生錯誤，將使用離線模式');
+            }
+        }
 
         // ==================== 事件監聽器綁定 ====================
         function bindEventListeners() {
-            console.log('開始綁定事件監聽器...');
+            // 設定按鈕
+            document.getElementById('settingsBtn').addEventListener('click', showSettingsModal);
+            document.getElementById('closeSettingsBtn').addEventListener('click', hideSettingsModal);
+            
+            // Firebase 相關按鈕
+            document.getElementById('syncBtn').addEventListener('click', manualSync);
+            document.getElementById('reconnectBtn').addEventListener('click', reconnectFirebase);
+            document.getElementById('goOfflineBtn').addEventListener('click', goOffline);
+            document.getElementById('forceSync').addEventListener('click', forceSync);
+            document.getElementById('signOutBtn').addEventListener('click', signOutUser);
+            
+            // 自動同步開關
+            document.getElementById('autoSyncToggle').addEventListener('change', function(e) {
+                autoSyncEnabled = e.target.checked;
+                localStorage.setItem('autoSyncEnabled', autoSyncEnabled);
+                showSuccessNotification(autoSyncEnabled ? '自動同步已開啟' : '自動同步已關閉');
+            });
+            
+            // 技術員管理
+            document.getElementById('addTechnicianBtn').addEventListener('click', function() {
+                const input = document.getElementById('newTechnicianInput');
+                addTechnician(input.value);
+                input.value = '';
+            });
+            
+            document.getElementById('newTechnicianInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    addTechnician(this.value);
+                    this.value = '';
+                }
+            });
+            
+            // 清除本地資料
+            document.getElementById('clearLocalDataBtn').addEventListener('click', function() {
+                if (confirm('確定要清除所有本地資料嗎？系統將重新從雲端載入資料。')) {
+                    clearLocalData();
+                }
+            });
             
             // 視圖切換按鈕
             document.getElementById('currentViewBtn').addEventListener('click', function() {
@@ -510,59 +907,19 @@
             document.getElementById('technicianFilter').addEventListener('change', filterRecords);
 
             // 新增記錄
-            document.getElementById('addRecordBtn').addEventListener('click', function() {
-                console.log('點擊新增記錄按鈕');
-                showAddRecordModal();
-            });
-            
-            document.getElementById('cancelAddBtn').addEventListener('click', function() {
-                hideAddRecordModal();
-            });
-            
+            document.getElementById('addRecordBtn').addEventListener('click', showAddRecordModal);
+            document.getElementById('cancelAddBtn').addEventListener('click', hideAddRecordModal);
             document.getElementById('addRecordForm').addEventListener('submit', handleAddRecord);
 
-            // 同步和批量操作
-            document.getElementById('syncBtn').addEventListener('click', function() {
-                console.log('點擊同步按鈕');
-                syncData();
-            });
-            
+            // 批量操作
             document.getElementById('bulkActionsBtn').addEventListener('click', toggleBulkActions);
-
-            // 匯出功能
-            document.getElementById('exportBtn').addEventListener('click', function(e) {
-                e.stopPropagation();
-                toggleExportMenu();
-            });
-            
-            document.getElementById('exportCSV').addEventListener('click', exportToCSV);
-            document.getElementById('exportStats').addEventListener('click', exportStatistics);
-
-            // 批量操作按鈕
             document.getElementById('selectAllCheckbox').addEventListener('change', toggleSelectAll);
             document.getElementById('bulkCompleteBtn').addEventListener('click', () => bulkUpdateStatus('completed'));
             document.getElementById('bulkPendingBtn').addEventListener('click', () => bulkUpdateStatus('pending'));
             document.getElementById('bulkDeleteBtn').addEventListener('click', bulkDeleteRecords);
 
-            // Firebase 模態框
-            document.getElementById('useOfflineBtn').addEventListener('click', function() {
-                console.log('使用離線模式');
-                document.getElementById('firebaseModal').classList.add('hidden');
-                updateCloudStatus('offline', '離線模式');
-                isOnlineMode = false;
-                loadRecords();
-            });
-            
-            document.getElementById('closeFirebaseModal').addEventListener('click', function() {
-                console.log('關閉設定模態框');
-                document.getElementById('firebaseModal').classList.add('hidden');
-                setTimeout(() => {
-                    checkFirebaseConfig();
-                    if (isOnlineMode) {
-                        loadRecords();
-                    }
-                }, 100);
-            });
+            // 匯出功能
+            document.getElementById('exportBtn').addEventListener('click', exportToCSV);
 
             // 點擊外部關閉模態框
             document.getElementById('addRecordModal').addEventListener('click', function(e) {
@@ -570,84 +927,177 @@
                     hideAddRecordModal();
                 }
             });
-
-            // 點擊外部關閉匯出選單
-            document.addEventListener('click', function(e) {
-                const exportMenu = document.getElementById('exportMenu');
-                const exportBtn = document.getElementById('exportBtn');
-                
-                if (!exportBtn.contains(e.target) && !exportMenu.contains(e.target)) {
-                    exportMenu.classList.add('hidden');
+            
+            document.getElementById('settingsModal').addEventListener('click', function(e) {
+                if (e.target.id === 'settingsModal') {
+                    hideSettingsModal();
                 }
             });
+        }
 
-            console.log('事件監聽器綁定完成');
+        // ==================== Firebase 操作函數 ====================
+        async function manualSync() {
+            if (!isFirebaseConnected) {
+                await reconnectFirebase();
+                return;
+            }
+            
+            showSyncIndicator();
+            await processPendingOperations();
+            await syncTechniciansToFirebase();
+            hideSyncIndicator();
+            showSuccessNotification('手動同步完成！');
+        }
+
+        async function reconnectFirebase() {
+            try {
+                updateCloudStatus('connecting', '重新連線中...');
+                const { enableNetwork } = window.firebaseModules;
+                const db = window.firebaseDb;
+                
+                await enableNetwork(db);
+                await initializeFirebase();
+            } catch (error) {
+                console.error('重新連線失敗:', error);
+                handleFirebaseError(error);
+            }
+        }
+
+        async function goOffline() {
+            try {
+                const { disableNetwork } = window.firebaseModules;
+                const db = window.firebaseDb;
+                
+                await disableNetwork(db);
+                isFirebaseConnected = false;
+                updateCloudStatus('offline', '已切換到離線模式');
+                showSuccessNotification('已切換到離線模式');
+            } catch (error) {
+                console.error('切換離線模式失敗:', error);
+            }
+        }
+
+        async function forceSync() {
+            if (!confirm('強制同步將覆蓋所有本地資料，確定要繼續嗎？')) {
+                return;
+            }
+            
+            try {
+                showSyncIndicator();
+                
+                // 清除本地資料
+                records = [];
+                technicians = ['曾', '李'];
+                
+                // 重新從 Firebase 載入
+                await loadDataFromFirebase();
+                
+                hideSyncIndicator();
+                showSuccessNotification('強制同步完成！');
+            } catch (error) {
+                console.error('強制同步失敗:', error);
+                hideSyncIndicator();
+                showErrorNotification('強制同步失敗');
+            }
+        }
+
+        async function loadDataFromFirebase() {
+            if (!isFirebaseConnected) return;
+            
+            try {
+                const { collection, getDocs, query, orderBy } = window.firebaseModules;
+                const db = window.firebaseDb;
+                
+                // 載入記錄
+                const recordsSnapshot = await getDocs(query(collection(db, 'repairRecords'), orderBy('createdAt', 'desc')));
+                const cloudRecords = [];
+                recordsSnapshot.forEach(doc => {
+                    cloudRecords.push({
+                        id: doc.id,
+                        ...doc.data(),
+                        firebaseId: doc.id
+                    });
+                });
+                
+                // 載入技術員
+                const techniciansSnapshot = await getDocs(collection(db, 'technicians'));
+                const cloudTechnicians = [];
+                techniciansSnapshot.forEach(doc => {
+                    cloudTechnicians.push(doc.data().name);
+                });
+                
+                records = cloudRecords;
+                if (cloudTechnicians.length > 0) {
+                    technicians = [...new Set([...technicians, ...cloudTechnicians])].sort();
+                }
+                
+                saveToLocalStorage();
+                saveTechniciansToLocal();
+                updateTechnicianOptions();
+                filterRecords();
+                
+            } catch (error) {
+                console.error('從 Firebase 載入資料失敗:', error);
+                throw error;
+            }
+        }
+
+        async function signOutUser() {
+            if (!confirm('確定要登出嗎？')) return;
+            
+            try {
+                const { signOut } = window.firebaseModules;
+                const auth = window.firebaseAuth;
+                
+                await signOut(auth);
+                currentUser = null;
+                isFirebaseConnected = false;
+                updateAuthStatus(false);
+                updateCloudStatus('offline', '已登出');
+                showSuccessNotification('已登出');
+            } catch (error) {
+                console.error('登出失敗:', error);
+                showErrorNotification('登出失敗');
+            }
+        }
+
+        function clearLocalData() {
+            localStorage.clear();
+            records = [];
+            technicians = ['曾', '李'];
+            pendingOperations = [];
+            selectedRecords.clear();
+            
+            if (isFirebaseConnected) {
+                loadDataFromFirebase();
+            } else {
+                filterRecords();
+                updateTechnicianOptions();
+            }
+            
+            showSuccessNotification('本地資料已清除');
         }
 
         // ==================== 資料載入函數 ====================
-        async function loadRecords() {
-            console.log('載入記錄...');
-            if (isOnlineMode) {
-                setupRealtimeListener();
-            } else {
-                loadFromLocalStorage();
-                filterRecords();
+        function loadLocalData() {
+            loadRecords();
+            loadTechnicians();
+            loadPendingOperations();
+            
+            // 載入自動同步設定
+            const saved = localStorage.getItem('autoSyncEnabled');
+            if (saved !== null) {
+                autoSyncEnabled = JSON.parse(saved);
+                document.getElementById('autoSyncToggle').checked = autoSyncEnabled;
             }
         }
 
-        function setupRealtimeListener() {
-            if (unsubscribe) {
-                unsubscribe();
-            }
-
-            try {
-                updateCloudStatus('syncing', '連接中...');
-                
-                const q = window.firestore.query(
-                    window.firestore.collection(window.db, 'records'),
-                    window.firestore.orderBy('date', 'desc')
-                );
-                
-                unsubscribe = window.firestore.onSnapshot(q, 
-                    (querySnapshot) => {
-                        records = [];
-                        querySnapshot.forEach((doc) => {
-                            records.push({ id: doc.id, ...doc.data() });
-                        });
-                        
-                        console.log('即時更新：載入了', records.length, '筆記錄');
-                        lastUpdate = new Date();
-                        updateCloudStatus('online', '雲端同步 (即時)');
-                        
-                        filterRecords();
-                        showUpdateNotification();
-                    },
-                    (error) => {
-                        console.error('即時監聽失敗:', error);
-                        updateCloudStatus('offline', '連線中斷');
-                        
-                        setTimeout(() => {
-                            if (isOnlineMode) {
-                                setupRealtimeListener();
-                            }
-                        }, 5000);
-                    }
-                );
-                
-                console.log('即時監聽器已設定');
-            } catch (error) {
-                console.error('設定監聽器失敗:', error);
-                updateCloudStatus('offline', '連線失敗');
-                loadFromLocalStorage();
-            }
-        }
-
-        function loadFromLocalStorage() {
+        function loadRecords() {
             const saved = localStorage.getItem('repairRecords');
             if (saved) {
                 records = JSON.parse(saved);
-                console.log('從本地載入了', records.length, '筆記錄');
             } else {
+                // 初始測試資料
                 const currentDate = new Date();
                 const currentYear = currentDate.getFullYear();
                 const currentMonth = (currentDate.getMonth() + 1).toString().padStart(2, '0');
@@ -662,7 +1112,9 @@
                         repairItem: '測試維修', 
                         supplement: '測試補充', 
                         technician: '曾', 
-                        status: 'completed' 
+                        status: 'completed',
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
                     },
                     { 
                         id: '2', 
@@ -673,53 +1125,131 @@
                         repairItem: '測試維修2', 
                         supplement: '測試補充2', 
                         technician: '李', 
-                        status: 'pending' 
+                        status: 'pending',
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
                     }
                 ];
                 saveToLocalStorage();
-                console.log('使用測試資料');
             }
+            filterRecords();
         }
 
         function saveToLocalStorage() {
             localStorage.setItem('repairRecords', JSON.stringify(records));
         }
 
-        // ==================== Firebase 操作函數 ====================
-        async function addToFirebase(record) {
-            try {
-                await window.firestore.addDoc(window.firestore.collection(window.db, 'records'), record);
-                return true;
-            } catch (error) {
-                console.error('新增到 Firebase 失敗:', error);
-                return false;
+        // ==================== 技術員管理函數 ====================
+        function loadTechnicians() {
+            const saved = localStorage.getItem('techniciansList');
+            if (saved) {
+                technicians = JSON.parse(saved);
             }
+            updateTechnicianOptions();
         }
 
-        async function updateInFirebase(id, data) {
-            try {
-                const docRef = window.firestore.doc(window.db, 'records', id);
-                await window.firestore.updateDoc(docRef, data);
-                return true;
-            } catch (error) {
-                console.error('更新到 Firebase 失敗:', error);
-                return false;
-            }
+        function saveTechniciansToLocal() {
+            localStorage.setItem('techniciansList', JSON.stringify(technicians));
         }
 
-        async function deleteFromFirebase(id) {
-            try {
-                await window.firestore.deleteDoc(window.firestore.doc(window.db, 'records', id));
-                return true;
-            } catch (error) {
-                console.error('從 Firebase 刪除失敗:', error);
-                return false;
+        function updateTechnicianOptions() {
+            // 更新新增記錄表單的技術員選項
+            const recordSelect = document.getElementById('recordTechnician');
+            if (recordSelect) {
+                const currentValue = recordSelect.value;
+                recordSelect.innerHTML = technicians.map(tech => 
+                    `<option value="${tech}">${tech}</option>`
+                ).join('');
+                
+                if (technicians.includes(currentValue)) {
+                    recordSelect.value = currentValue;
+                }
             }
+
+            // 更新篩選器的技術員選項
+            const filterSelect = document.getElementById('technicianFilter');
+            if (filterSelect) {
+                const currentValue = filterSelect.value;
+                filterSelect.innerHTML = '<option value="all">所有技術員</option>' + 
+                    technicians.map(tech => 
+                        `<option value="${tech}">${tech}</option>`
+                    ).join('');
+                
+                if (technicians.includes(currentValue)) {
+                    filterSelect.value = currentValue;
+                } else {
+                    filterSelect.value = 'all';
+                }
+            }
+
+            // 更新設定頁面的技術員列表
+            updateTechniciansListInSettings();
+        }
+
+        function updateTechniciansListInSettings() {
+            const listContainer = document.getElementById('techniciansList');
+            if (!listContainer) return;
+
+            listContainer.innerHTML = technicians.map((tech, index) => `
+                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                    <div class="flex items-center gap-3">
+                        <span>👤</span>
+                        <span class="font-medium">${tech}</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="deleteTechnician(${index})" 
+                                class="p-1 text-red-600 hover:text-red-800 transition-colors" 
+                                title="刪除"
+                                ${technicians.length <= 1 ? 'disabled' : ''}>
+                            🗑️
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function addTechnician(name) {
+            if (!name || name.trim() === '') {
+                alert('請輸入技術員名稱');
+                return;
+            }
+
+            name = name.trim();
+            if (technicians.includes(name)) {
+                alert('此技術員已存在');
+                return;
+            }
+
+            technicians.push(name);
+            technicians.sort();
+            saveTechniciansToLocal();
+            updateTechnicianOptions();
+            
+            // 同步到 Firebase
+            if (autoSyncEnabled && isFirebaseConnected) {
+                await syncTechniciansToFirebase();
+            }
+            
+            showSuccessNotification('技術員新增成功！');
+        }
+
+        window.deleteTechnician = function(index) {
+            if (technicians.length <= 1) {
+                alert('至少需要保留一位技術員');
+                return;
+            }
+
+            const techName = technicians[index];
+            if (!confirm(`確定要刪除技術員「${techName}」嗎？`)) return;
+
+            technicians.splice(index, 1);
+            saveTechniciansToLocal();
+            updateTechnicianOptions();
+            showSuccessNotification('技術員刪除成功！');
         }
 
         // ==================== 視圖相關函數 ====================
         function switchView(view) {
-            console.log('切換視圖到:', view);
             currentView = view;
             updateCurrentView();
             filterRecords();
@@ -751,6 +1281,7 @@
             const container = document.getElementById('historyYearList');
             container.innerHTML = '';
 
+            // 按年份分組
             const grouped = {};
             records.forEach(record => {
                 const date = new Date(record.date);
@@ -762,11 +1293,13 @@
                 grouped[year][month].push(record);
             });
 
+            // 建立年份列表
             Object.keys(grouped)
                 .sort((a, b) => parseInt(b) - parseInt(a))
                 .forEach(year => {
                     const yearDiv = document.createElement('div');
                     
+                    // 年份按鈕
                     const yearBtn = document.createElement('button');
                     yearBtn.className = 'flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-gray-50 rounded-lg';
                     yearBtn.onclick = () => toggleYear(parseInt(year));
@@ -777,7 +1310,7 @@
                     yearBtn.innerHTML = `
                         <div class="flex items-center justify-between w-full">
                             <div class="flex items-center gap-2">
-                                <i data-lucide="${expandedYears.has(parseInt(year)) ? 'chevron-down' : 'chevron-right'}" class="icon"></i>
+                                <span>${expandedYears.has(parseInt(year)) ? '▼' : '▶'}</span>
                                 <span class="font-medium">${year}年</span>
                             </div>
                             <div class="flex gap-2 text-xs">
@@ -789,6 +1322,7 @@
                     
                     yearDiv.appendChild(yearBtn);
                     
+                    // 月份列表
                     if (expandedYears.has(parseInt(year))) {
                         const monthsDiv = document.createElement('div');
                         monthsDiv.className = 'ml-6 space-y-1';
@@ -808,7 +1342,7 @@
                                 
                                 monthBtn.innerHTML = `
                                     <div class="flex items-center justify-between w-full">
-                                        <span>${getMonthName(parseInt(month))} (${grouped[year][month].length}筆)</span>
+                                        <span>${parseInt(month)}月 (${grouped[year][month].length}筆)</span>
                                         <div class="flex gap-2 text-xs">
                                             <span class="px-2 py-1 bg-green-100 text-green-700 rounded">已完成: ${monthCompleted}</span>
                                             <span class="px-2 py-1 bg-orange-100 text-orange-700 rounded">未修: ${monthPending}</span>
@@ -824,8 +1358,6 @@
                     
                     container.appendChild(yearDiv);
                 });
-            
-            lucide.createIcons();
         }
 
         function toggleYear(year) {
@@ -841,11 +1373,6 @@
             selectedPeriod = { year, month };
             buildHistorySelector();
             filterRecords();
-        }
-
-        function getMonthName(month) {
-            const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
-            return monthNames[month - 1];
         }
 
         // ==================== 記錄操作函數 ====================
@@ -907,6 +1434,7 @@
 
             noRecords.classList.add('hidden');
 
+            // 更新表格標題
             if (showBulkActions) {
                 if (!tableHeader.querySelector('.bulk-checkbox')) {
                     const checkboxTh = document.createElement('th');
@@ -921,6 +1449,7 @@
                 if (checkboxTh) checkboxTh.remove();
             }
 
+            // 渲染行
             tbody.innerHTML = filteredRecords.map(record => `
                 <tr class="hover:bg-gray-50 transition-colors cursor-pointer" onclick="toggleRowExpansion('${record.id}')">
                     ${showBulkActions ? `
@@ -931,8 +1460,9 @@
                     ` : ''}
                     <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                         <div class="flex items-center gap-2">
-                            <i data-lucide="chevron-right" class="icon text-gray-400 expand-icon" data-id="${record.id}"></i>
+                            <span class="expand-icon" data-id="${record.id}">▶</span>
                             ${record.date}
+                            ${record.firebaseId ? '<span class="text-green-600" title="已同步到雲端">☁️</span>' : '<span class="text-orange-600" title="僅存在本地">📱</span>'}
                         </div>
                     </td>
                     <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${record.registrationData}</td>
@@ -940,7 +1470,7 @@
                     <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-600">${record.sequence}</td>
                     <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                         <div class="flex items-center gap-2">
-                            <i data-lucide="user" class="icon text-gray-400"></i>
+                            <span>👤</span>
                             ${record.technician}
                         </div>
                     </td>
@@ -949,14 +1479,13 @@
                             <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
                                 record.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800'
                             }">
-                                <i data-lucide="${record.status === 'completed' ? 'check-circle' : 'x'}" class="w-3 h-3"></i>
-                                ${record.status === 'completed' ? '已完成' : '未修'}
+                                ${record.status === 'completed' ? '✓ 已完成' : '✗ 未修'}
                             </span>
                             <button onclick="editRecord('${record.id}')" class="p-1 text-blue-600 hover:text-blue-800 transition-colors" title="編輯">
-                                <i data-lucide="edit-2" class="icon"></i>
+                                ✏️
                             </button>
                             <button onclick="deleteRecord('${record.id}')" class="p-1 text-red-600 hover:text-red-800 transition-colors" title="刪除">
-                                <i data-lucide="trash-2" class="icon"></i>
+                                🗑️
                             </button>
                         </div>
                     </td>
@@ -976,13 +1505,23 @@
                                     ${record.supplement || '無'}
                                 </div>
                             </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">同步狀態</label>
+                                <div class="p-3 bg-white border border-gray-200 rounded-lg text-sm">
+                                    ${record.firebaseId ? 
+                                        '<span class="text-green-600 flex items-center gap-1">☁️ 已同步到雲端</span>' : 
+                                        '<span class="text-orange-600 flex items-center gap-1">📱 僅存在本地</span>'
+                                    }
+                                    ${record.createdAt ? `<div class="text-xs text-gray-500 mt-1">建立: ${new Date(record.createdAt).toLocaleString()}</div>` : ''}
+                                    ${record.updatedAt ? `<div class="text-xs text-gray-500">更新: ${new Date(record.updatedAt).toLocaleString()}</div>` : ''}
+                                </div>
+                            </div>
                             ${record.previousRecordId ? `
-                                <div>
+                                <div class="md:col-span-3">
                                     <label class="block text-sm font-medium text-gray-700 mb-2">歷史記錄</label>
                                     <button onclick="jumpToPreviousRecord('${record.previousRecordId}')" 
                                             class="w-full px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700 hover:bg-blue-100 transition-colors flex items-center justify-center gap-2">
-                                        <i data-lucide="calendar" class="icon"></i>
-                                        查看上次記錄
+                                        📅 查看上次記錄
                                     </button>
                                 </div>
                             ` : ''}
@@ -991,8 +1530,7 @@
                 </tr>
             `).join('');
 
-            lucide.createIcons();
-
+            // 綁定複選框事件
             document.querySelectorAll('.record-checkbox').forEach(checkbox => {
                 checkbox.addEventListener('change', (e) => {
                     const id = e.target.dataset.id;
@@ -1019,16 +1557,42 @@
             document.getElementById('addRecordModal').classList.remove('hidden');
             document.getElementById('addRecordForm').reset();
             document.getElementById('recordDate').value = new Date().toISOString().split('T')[0];
+            updateTechnicianOptions();
         }
 
         function hideAddRecordModal() {
             document.getElementById('addRecordModal').classList.add('hidden');
         }
 
+        function showSettingsModal() {
+            document.getElementById('settingsModal').classList.remove('hidden');
+            updateTechniciansListInSettings();
+            updateFirebaseStatusInSettings();
+        }
+
+        function hideSettingsModal() {
+            document.getElementById('settingsModal').classList.add('hidden');
+        }
+
+        function updateFirebaseStatusInSettings() {
+            const statusElement = document.getElementById('firebaseStatus');
+            if (isFirebaseConnected && currentUser) {
+                statusElement.textContent = `已連線 (用戶: ${currentUser.uid.substring(0, 8)}...)`;
+                statusElement.className = 'text-sm text-green-600';
+            } else if (isOnline) {
+                statusElement.textContent = '連線中...';
+                statusElement.className = 'text-sm text-yellow-600';
+            } else {
+                statusElement.textContent = '離線模式';
+                statusElement.className = 'text-sm text-gray-600';
+            }
+        }
+
         async function handleAddRecord(e) {
             e.preventDefault();
             
             const formData = {
+                id: Date.now().toString(),
                 date: document.getElementById('recordDate').value,
                 registrationData: document.getElementById('recordRegistration').value,
                 model: document.getElementById('recordModel').value,
@@ -1041,8 +1605,7 @@
                 updatedAt: new Date().toISOString()
             };
 
-            console.log('新增記錄:', formData);
-
+            // 檢查一年內是否有相同品牌機型和序號的記錄
             const oneYearAgo = new Date();
             oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
             
@@ -1062,80 +1625,64 @@
                 formData.previousRecordId = existingRecord.id;
             }
 
-            let success = true;
-            if (isOnlineMode) {
-                updateCloudStatus('syncing', '上傳中...');
-                success = await addToFirebase(formData);
-                if (success) {
-                    updateCloudStatus('online', '雲端同步 (即時)');
-                } else {
-                    updateCloudStatus('offline', '上傳失敗');
+            // 添加到本地
+            records.unshift(formData);
+            saveToLocalStorage();
+            
+            // 同步到 Firebase
+            if (autoSyncEnabled && isFirebaseConnected) {
+                const firebaseId = await addRecordToFirebase(formData);
+                if (firebaseId) {
+                    // 更新本地記錄的 Firebase ID
+                    const localRecord = records.find(r => r.id === formData.id);
+                    if (localRecord) {
+                        localRecord.firebaseId = firebaseId;
+                        saveToLocalStorage();
+                    }
                 }
-            } else {
-                const newId = 'record_' + Date.now();
-                const newRecord = { id: newId, ...formData };
-                records.unshift(newRecord);
-                saveToLocalStorage();
-                filterRecords();
             }
-
-            if (success) {
-                hideAddRecordModal();
-                showSuccessNotification('記錄新增成功！');
-            } else {
-                alert('新增失敗，請檢查網路連線');
-            }
+            
+            filterRecords();
+            hideAddRecordModal();
+            showSuccessNotification('記錄新增成功！');
         }
 
-        async function updateRecordStatus(id, newStatus) {
-            const recordIndex = records.findIndex(r => r.id === id);
-            if (recordIndex === -1) return;
+        window.editRecord = async function(id) {
+            const record = records.find(r => r.id === id);
+            if (!record) return;
 
-            if (isOnlineMode) {
-                updateCloudStatus('syncing', '更新中...');
-                const success = await updateInFirebase(id, { 
-                    status: newStatus,
-                    updatedAt: new Date().toISOString()
-                });
-                if (success) {
-                    updateCloudStatus('online', '雲端同步 (即時)');
-                    showSuccessNotification('狀態更新成功！');
-                } else {
-                    updateCloudStatus('offline', '更新失敗');
-                    alert('更新失敗，請檢查網路連線');
-                }
-            } else {
-                const oldRecord = records[recordIndex];
-                records[recordIndex] = { ...oldRecord, status: newStatus };
+            const newStatus = record.status === 'pending' ? 'completed' : 'pending';
+            
+            if (confirm(`將記錄狀態改為 ${newStatus === 'completed' ? '已完成' : '未修'}？`)) {
+                record.status = newStatus;
+                record.updatedAt = new Date().toISOString();
                 saveToLocalStorage();
+                
+                // 同步到 Firebase
+                if (autoSyncEnabled && isFirebaseConnected) {
+                    await updateRecordInFirebase(record);
+                }
+                
                 filterRecords();
                 showSuccessNotification('狀態更新成功！');
             }
         }
 
-        async function deleteRecord(id) {
+        window.deleteRecord = async function(id) {
             if (!confirm('確定要刪除此記錄嗎？')) return;
 
-            if (isOnlineMode) {
-                updateCloudStatus('syncing', '刪除中...');
-                const success = await deleteFromFirebase(id);
-                if (success) {
-                    updateCloudStatus('online', '雲端同步 (即時)');
-                    showSuccessNotification('記錄刪除成功！');
-                } else {
-                    updateCloudStatus('offline', '刪除失敗');
-                    alert('刪除失敗，請檢查網路連線');
-                }
-            } else {
-                const recordIndex = records.findIndex(r => r.id === id);
-                if (recordIndex !== -1) {
-                    records.splice(recordIndex, 1);
-                    saveToLocalStorage();
-                    selectedRecords.delete(id);
-                    filterRecords();
-                    showSuccessNotification('記錄刪除成功！');
-                }
+            const record = records.find(r => r.id === id);
+            records = records.filter(r => r.id !== id);
+            saveToLocalStorage();
+            selectedRecords.delete(id);
+            
+            // 從 Firebase 刪除
+            if (autoSyncEnabled && isFirebaseConnected && record?.firebaseId) {
+                await deleteRecordFromFirebase(record.firebaseId);
             }
+            
+            filterRecords();
+            showSuccessNotification('記錄刪除成功！');
         }
 
         // ==================== 批量操作 ====================
@@ -1205,36 +1752,29 @@
 
             if (!confirm(`確定要將選中的 ${selectedRecords.size} 筆記錄標記為 ${newStatus === 'completed' ? '已完成' : '未修'}？`)) return;
 
-            if (isOnlineMode) {
-                updateCloudStatus('syncing', '批量更新中...');
-                let allSuccess = true;
-                
-                for (const id of selectedRecords) {
-                    const success = await updateInFirebase(id, { 
-                        status: newStatus,
-                        updatedAt: new Date().toISOString()
-                    });
-                    if (!success) allSuccess = false;
+            const updatedRecords = [];
+            selectedRecords.forEach(id => {
+                const record = records.find(r => r.id === id);
+                if (record) {
+                    record.status = newStatus;
+                    record.updatedAt = new Date().toISOString();
+                    updatedRecords.push(record);
                 }
+            });
 
-                if (allSuccess) {
-                    updateCloudStatus('online', '雲端同步 (即時)');
-                    showSuccessNotification(`已更新 ${selectedRecords.size} 筆記錄！`);
-                } else {
-                    updateCloudStatus('offline', '部分更新失敗');
-                    alert('部分更新失敗，請檢查網路連線');
+            saveToLocalStorage();
+            
+            // 批量同步到 Firebase
+            if (autoSyncEnabled && isFirebaseConnected) {
+                showSyncIndicator();
+                for (const record of updatedRecords) {
+                    await updateRecordInFirebase(record);
                 }
-            } else {
-                selectedRecords.forEach(id => {
-                    const recordIndex = records.findIndex(r => r.id === id);
-                    if (recordIndex !== -1) {
-                        records[recordIndex].status = newStatus;
-                    }
-                });
-                saveToLocalStorage();
-                filterRecords();
-                showSuccessNotification(`已更新 ${selectedRecords.size} 筆記錄！`);
+                hideSyncIndicator();
             }
+            
+            filterRecords();
+            showSuccessNotification(`已更新 ${selectedRecords.size} 筆記錄！`);
 
             selectedRecords.clear();
             showBulkActions = false;
@@ -1246,35 +1786,23 @@
 
             if (!confirm(`確定要刪除選中的 ${selectedRecords.size} 筆記錄嗎？`)) return;
 
-            const idsToDelete = Array.from(selectedRecords);
-
-            if (isOnlineMode) {
-                updateCloudStatus('syncing', '批量刪除中...');
-                let allSuccess = true;
-                
-                for (const id of idsToDelete) {
-                    const success = await deleteFromFirebase(id);
-                    if (!success) allSuccess = false;
-                }
-
-                if (allSuccess) {
-                    updateCloudStatus('online', '雲端同步 (即時)');
-                    showSuccessNotification(`已刪除 ${idsToDelete.length} 筆記錄！`);
-                } else {
-                    updateCloudStatus('offline', '部分刪除失敗');
-                    alert('部分刪除失敗，請檢查網路連線');
-                }
-            } else {
-                idsToDelete.forEach(id => {
-                    const recordIndex = records.findIndex(r => r.id === id);
-                    if (recordIndex !== -1) {
-                        records.splice(recordIndex, 1);
+            const recordsToDelete = records.filter(r => selectedRecords.has(r.id));
+            records = records.filter(r => !selectedRecords.has(r.id));
+            saveToLocalStorage();
+            
+            // 批量從 Firebase 刪除
+            if (autoSyncEnabled && isFirebaseConnected) {
+                showSyncIndicator();
+                for (const record of recordsToDelete) {
+                    if (record.firebaseId) {
+                        await deleteRecordFromFirebase(record.firebaseId);
                     }
-                });
-                saveToLocalStorage();
-                filterRecords();
-                showSuccessNotification(`已刪除 ${idsToDelete.length} 筆記錄！`);
+                }
+                hideSyncIndicator();
             }
+            
+            filterRecords();
+            showSuccessNotification(`已刪除 ${selectedRecords.size} 筆記錄！`);
 
             selectedRecords.clear();
             showBulkActions = false;
@@ -1282,13 +1810,8 @@
         }
 
         // ==================== 匯出功能 ====================
-        function toggleExportMenu() {
-            const menu = document.getElementById('exportMenu');
-            menu.classList.toggle('hidden');
-        }
-
         function exportToCSV() {
-            const headers = ['日期', '登記資料', '品牌機型', '序號', '維修項目', '補充', '技術員', '狀態'];
+            const headers = ['日期', '登記資料', '品牌機型', '序號', '維修項目', '補充', '技術員', '狀態', '同步狀態'];
             const csvData = [
                 headers.join(','),
                 ...filteredRecords.map(record => [
@@ -1299,64 +1822,12 @@
                     `"${record.repairItem}"`,
                     `"${record.supplement}"`,
                     record.technician,
-                    record.status === 'completed' ? '已完成' : '未修'
+                    record.status === 'completed' ? '已完成' : '未修',
+                    record.firebaseId ? '已同步' : '本地'
                 ].join(','))
             ].join('\n');
 
             downloadFile(csvData, `維修記錄_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
-            document.getElementById('exportMenu').classList.add('hidden');
-        }
-
-        function exportStatistics() {
-            const totalRecords = filteredRecords.length;
-            const completedRecords = filteredRecords.filter(r => r.status === 'completed').length;
-            const pendingRecords = filteredRecords.filter(r => r.status === 'pending').length;
-            const completionRate = totalRecords > 0 ? ((completedRecords / totalRecords) * 100).toFixed(1) : 0;
-            
-            const technicianStats = {};
-            filteredRecords.forEach(record => {
-                if (!technicianStats[record.technician]) {
-                    technicianStats[record.technician] = { total: 0, completed: 0, pending: 0 };
-                }
-                technicianStats[record.technician].total++;
-                if (record.status === 'completed') {
-                    technicianStats[record.technician].completed++;
-                } else {
-                    technicianStats[record.technician].pending++;
-                }
-            });
-
-            const modelStats = {};
-            filteredRecords.forEach(record => {
-                if (!modelStats[record.model]) {
-                    modelStats[record.model] = 0;
-                }
-                modelStats[record.model]++;
-            });
-
-            const reportContent = `維修記錄統計報表
-生成時間: ${new Date().toLocaleString('zh-TW')}
-查看期間: ${currentView === 'current' ? '本月記錄' : selectedPeriod ? `${selectedPeriod.year}年${selectedPeriod.month}月` : '歷史記錄'}
-
-=== 總體統計 ===
-總記錄數: ${totalRecords}
-已完成: ${completedRecords}
-未修: ${pendingRecords}
-完成率: ${completionRate}%
-
-=== 技術員統計 ===
-${Object.entries(technicianStats).map(([tech, stats]) => 
-  `${tech}: 總數${stats.total} (已完成${stats.completed}, 未修${stats.pending})`
-).join('\n')}
-
-=== 品牌機型統計 ===
-${Object.entries(modelStats)
-  .sort((a, b) => b[1] - a[1])
-  .map(([model, count]) => `${model}: ${count}次`)
-  .join('\n')}`;
-
-            downloadFile(reportContent, `維修統計報表_${new Date().toISOString().split('T')[0]}.txt`, 'text/plain');
-            document.getElementById('exportMenu').classList.add('hidden');
         }
 
         function downloadFile(content, filename, mimeType) {
@@ -1372,53 +1843,35 @@ ${Object.entries(modelStats)
         }
 
         // ==================== 輔助函數 ====================
-        function syncData() {
-            console.log('手動同步資料');
-            if (isOnlineMode) {
-                updateCloudStatus('syncing', '同步中...');
-                
-                if (unsubscribe) {
-                    showSuccessNotification('資料已是最新狀態！');
-                    updateCloudStatus('online', '雲端同步 (即時)');
-                } else {
-                    setupRealtimeListener();
-                }
-            } else {
-                alert('請先設定 Firebase 才能使用雲端同步功能');
-            }
-        }
-
-        function showUpdateNotification() {
-            const notification = document.createElement('div');
-            notification.className = 'notification fixed bottom-4 right-4 bg-green-100 text-green-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
-            notification.innerHTML = `
-                <i data-lucide="refresh-cw" class="icon animate-spin"></i>
-                <span>資料已更新</span>
-            `;
-            document.body.appendChild(notification);
-            lucide.createIcons();
-            
-            setTimeout(() => {
-                notification.remove();
-            }, 2000);
-        }
-
         function showSuccessNotification(message) {
             const notification = document.createElement('div');
-            notification.className = 'notification fixed top-20 right-4 bg-blue-100 text-blue-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
+            notification.className = 'notification fixed top-20 right-4 bg-green-100 text-green-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
             notification.innerHTML = `
-                <i data-lucide="check-circle" class="icon"></i>
+                <span>✓</span>
                 <span>${message}</span>
             `;
             document.body.appendChild(notification);
-            lucide.createIcons();
             
             setTimeout(() => {
                 notification.remove();
             }, 3000);
         }
 
-        function toggleRowExpansion(id) {
+        function showErrorNotification(message) {
+            const notification = document.createElement('div');
+            notification.className = 'notification fixed top-20 right-4 bg-red-100 text-red-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50';
+            notification.innerHTML = `
+                <span>⚠️</span>
+                <span>${message}</span>
+            `;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 5000);
+        }
+
+        window.toggleRowExpansion = function(id) {
             const detailsRow = document.getElementById(`details-${id}`);
             const expandIcon = document.querySelector(`[data-id="${id}"].expand-icon`);
             
@@ -1427,31 +1880,18 @@ ${Object.entries(modelStats)
                     row.classList.add('hidden');
                 });
                 document.querySelectorAll('.expand-icon').forEach(icon => {
-                    icon.setAttribute('data-lucide', 'chevron-right');
+                    icon.textContent = '▶';
                 });
                 
                 detailsRow.classList.remove('hidden');
-                expandIcon.setAttribute('data-lucide', 'chevron-down');
+                expandIcon.textContent = '▼';
             } else {
                 detailsRow.classList.add('hidden');
-                expandIcon.setAttribute('data-lucide', 'chevron-right');
-            }
-            
-            lucide.createIcons();
-        }
-
-        function editRecord(id) {
-            const record = records.find(r => r.id === id);
-            if (!record) return;
-
-            const newStatus = record.status === 'pending' ? 'completed' : 'pending';
-            
-            if (confirm(`將記錄狀態改為 ${newStatus === 'completed' ? '已完成' : '未修'}？`)) {
-                updateRecordStatus(id, newStatus);
+                expandIcon.textContent = '▶';
             }
         }
 
-        function jumpToPreviousRecord(recordId) {
+        window.jumpToPreviousRecord = function(recordId) {
             const targetRecord = records.find(r => r.id === recordId);
             if (!targetRecord) return;
 
@@ -1491,30 +1931,12 @@ ${Object.entries(modelStats)
             };
         }
 
-        // ==================== 全域函數（供 onclick 使用）====================
-        window.toggleRowExpansion = toggleRowExpansion;
+        // ==================== 全域函數暴露 ====================
+        window.addTechnician = addTechnician;
         window.editRecord = editRecord;
         window.deleteRecord = deleteRecord;
+        window.toggleRowExpansion = toggleRowExpansion;
         window.jumpToPreviousRecord = jumpToPreviousRecord;
-
-        // ==================== 清理和網路監測 ====================
-        window.addEventListener('beforeunload', () => {
-            if (unsubscribe) {
-                unsubscribe();
-            }
-        });
-
-        window.addEventListener('online', () => {
-            console.log('網路已連接');
-            if (isOnlineMode && !unsubscribe) {
-                setupRealtimeListener();
-            }
-        });
-
-        window.addEventListener('offline', () => {
-            console.log('網路已斷開');
-            updateCloudStatus('offline', '離線模式');
-        });
     </script>
 </body>
 </html>
